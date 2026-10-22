@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elkflash"
+version = "0.1.0"
+description = "Flash Elektron OS .syx files over USB MIDI"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+rtmidi = ["python-rtmidi"]
+
+[project.scripts]
+elkflash = "elkflash.cli:main"
+
+[tool.setuptools]
+packages = ["elkflash", "elkflash.transport"]
