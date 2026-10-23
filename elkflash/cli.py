@@ -19,6 +19,8 @@ def _eprint(*a):
 
 
 def _pick_pair(port: str | None, in_port: str | None = None, out_port: str | None = None):
+    if port and port.lower().startswith("tcp:"):
+        return PortPair(port, -1, -1, address=port)  # an emulator over TCP: no MIDI ports
     ins, outs = list_ports()
     if in_port or out_port:
         # Split ports, e.g. the emulator's loopback pair: write to one port,

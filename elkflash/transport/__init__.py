@@ -15,6 +15,7 @@ class PortPair:
     name: str
     in_index: int
     out_index: int
+    address: str | None = None  # an emulator over TCP (socket_link.py) instead of MIDI ports
 
 
 class Transport:
@@ -76,4 +77,7 @@ def _same_port(a: str, b: str) -> bool:
 
 
 def open_pair(pair: PortPair) -> Transport:
+    if pair.address:
+        from . import socket_link
+        return socket_link.open(pair.address)
     return backend().open(pair.in_index, pair.out_index)
