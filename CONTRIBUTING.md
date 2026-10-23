@@ -68,3 +68,29 @@ Say in the description:
 
 Do not attach the file. Whoever reviews the pull request downloads the same
 release from Elektron and checks that both hashes match before merging.
+
+## Open contribution: modified OS files for the MKI devices
+
+The Analog Four MKI / Analog Keys and the Analog Rytm MKI use the older ELE2
+container: one packed section, the main OS, and no section table. Their
+bootstrap is not a separate section. Each OS image carries an embedded copy
+of it with a version number, and the OS installs that copy over the unit's
+bootstrap at start-up when its version is newer. So a modified MKI OS could
+replace the bootstrap the first time it boots, and checking the version alone
+is not enough.
+
+Until that copy can be checked, elkflash accepts MKI files only when the
+whole file is a known stock release, so modified MKI builds are refused.
+A contribution that lifts this would need to:
+
+- unpack the main OS (the same LZ-style packing as the MKII main OS
+  section), written for this project rather than copied from GPL code, with
+  tests on synthetic data;
+- find the embedded bootstrap copy and its version in the unpacked image;
+- compare that copy with the stock one by sha256, and refuse the file when it
+  differs, with no override, as for the MKII devices;
+- keep the whole-file stock check for files the parser cannot read.
+
+Say in the pull request how you checked it (which stock releases and builds,
+and whether a unit was involved).
+
