@@ -122,14 +122,16 @@ Checked in the analog-emu emulator (Rytm MKII 1.73 to 1.74, A4 MKII 1.56) and
 on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
 12.0 s, back on USB 22 s after the commit, no key pressed) and on an Analog Rytm MKII
 (2026-10-23, a modified 1.74 build with the stock bootstrap over itself: 68 chunks in
-7.2 s, back on USB 17 s after the commit).
+7.2 s, back on USB 17 s after the commit; then three runs with the YES prompt,
+68 chunks in 7.2 s each, erase and write shown on the unit, restart a few
+seconds after YES).
 
 ## Devices
 
 | Device | Stock bootstrap known | Flashed with elkflash on hardware |
 |---|---|---|
 | Analog Four MKII | OS 1.56 | yes (with and without `--no-confirm`) |
-| Analog Rytm MKII | OS 1.73, 1.74 | yes (with `--no-confirm`) |
+| Analog Rytm MKII | OS 1.73, 1.74 | yes (with and without `--no-confirm`) |
 | Analog Four MKI / Analog Keys | OS 1.56 (stock file only) | no |
 | Analog Rytm MKI | OS 1.74 (stock file only) | no |
 | Analog Heat, Analog Heat MKII | OS 1.22 | no |
