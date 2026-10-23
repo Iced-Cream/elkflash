@@ -341,6 +341,9 @@ def main(argv=None) -> int:
 
     def common(p):
         p.add_argument("--port", help="part of the MIDI port name (default: the only Elektron port)")
+        p.add_argument("-q", "--quiet", action="store_true",
+                       help="print one line (the result, or what failed); the rest goes to --log")
+        p.add_argument("--log", help="with --quiet: append the full output to this file")
         p.add_argument("--in-port", help="read replies from this MIDI input (with --out-port; e.g. the "
                        "emulator's 'rytm-emu usb out')")
         p.add_argument("--out-port", help="send requests to this MIDI output (with --in-port; e.g. the "
@@ -403,11 +406,57 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_decode)
 
     args = ap.parse_args(argv)
+    if getattr(args, "quiet", False):
+        return _quietly(args)
+    return _run(args)
+
+
+def _run(args) -> int:
     try:
         return args.func(args)
     except (firmware.FirmwareError, TransportError, RpcTimeout, protocol.ProtocolError) as e:
         _eprint(f"error: {e}")
         return 1
+
+
+class _Sink:
+    """The output of a --quiet run: to the log (if any), keeping the last line."""
+
+    def __init__(self, log):
+        self.log, self.last, self.part = log, "", ""
+
+    def write(self, text):
+        if self.log:
+            self.log.write(text)
+        for piece in (self.part + text).replace("\r", "\n").split("\n")[:-1]:
+            if piece.strip():
+                self.last = piece.strip()
+        self.part = (self.part + text).replace("\r", "\n").split("\n")[-1]
+        return len(text)
+
+    def flush(self):
+        if self.log:
+            self.log.flush()
+
+
+def _quietly(args) -> int:
+    """Run with every line going to the log; print only the result line."""
+    log = open(args.log, "a", encoding="utf-8") if args.log else None
+    sink = _Sink(log)
+    out, err = sys.stdout, sys.stderr
+    sys.stdout = sys.stderr = sink
+    try:
+        rc = _run(args)
+    except KeyboardInterrupt:
+        rc = 130
+    finally:
+        sys.stdout, sys.stderr = out, err
+        if log:
+            log.close()
+    if sink.part.strip():
+        sink.last = sink.part.strip()
+    print(("ok: " if rc == 0 else f"failed (exit {rc}): ") + sink.last)
+    return rc
 
 
 if __name__ == "__main__":

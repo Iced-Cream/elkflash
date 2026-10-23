@@ -77,15 +77,16 @@ def screenshot_png(args: bytes, scale: int = 4) -> bytes:
             + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
-def poll(transport, timeout: float = 0.3):
+def poll(transport, timeout: float = 0.3, screen_too: bool = False):
     """-> (ping reply or None, version or None, screenshot PNG or None).
-    The screen is asked for only when Ping gets no answer."""
+    The screen is asked for when Ping gets no answer, or always with screen_too."""
     client = RpcClient(transport, first_seq=0x700)
     ping = version = screen = None
     try:
         ping = protocol.parse_ping_reply(client.call(protocol.CMD_PING, b"", timeout).args)
         version = protocol.parse_version_reply(client.call(protocol.CMD_SOFTWARE_VERSION, b"", timeout).args)
-        return ping, version, None
+        if not screen_too:
+            return ping, version, None
     except (RpcTimeout, protocol.ProtocolError):
         pass
     try:
@@ -97,18 +98,27 @@ def poll(transport, timeout: float = 0.3):
 
 def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0.25,
                      require_restart: bool = False, reply_timeout: float = 0.3, log=None,
-                     clock=time.monotonic, sleep=time.sleep) -> WaitResult:
+                     clock=time.monotonic, sleep=time.sleep, quiet_restart: float = 5.0,
+                     settle: float = 6.0) -> WaitResult:
     """Poll until the device answers Ping, or `timeout` s pass.
 
     find() returns the device's PortPair or None when it is not on USB;
     open_pair(pair) opens it. The port is opened afresh on every poll, since a
     restart invalidates the old handle. With require_restart an answer counts
-    only after the port has been gone (or failed to open) once; answers before
-    that come from the old OS while it flashes.
+    only after the port has been gone (or failed to open) once, or, on a port
+    that never goes away (an emulator's virtual MIDI ports), once full answers
+    (Ping and SoftwareVersion) have come for `settle` s without a gap, after a
+    quiet spell of at least `quiet_restart` s: answers before that come from the
+    old OS while it flashes. (Measured: a unit answers on and off while it
+    writes, gaps under 1 s, then its port goes for about 3 s; the analog-emu
+    window is quiet for 6-8 s, answers for under a second, is quiet for 8 s
+    while it restarts, then answers for good.)
     """
     t0 = clock()
     result = WaitResult("gone")
     last = None
+    last_full = t0          # the last full answer (Ping and SoftwareVersion)
+    since = None            # start of the current run of full answers after a quiet spell
 
     def note(state, text):
         nonlocal last
@@ -139,12 +149,21 @@ def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0
                 pass
             elif ping:
                 note("answering", f"answering ({ping.name}, OS {version})")
-                if not require_restart or result.port_dropped:
+                now = clock()
+                if version is not None:
+                    if since is None and now - last_full >= quiet_restart:
+                        since = now
+                    last_full = now
+                else:
+                    since = None
+                restarted = result.port_dropped or (since is not None and now - since >= settle)
+                if not require_restart or restarted:
                     result.state, result.name, result.version = "back", ping.name, version
                     result.seconds = clock() - t0
                     return result
             else:
                 result.went_quiet = True
+                since = None
                 note("quiet", "port there, no answer" + (" (screen answers)" if screen else ""))
         if clock() - t0 >= timeout:
             result.seconds = clock() - t0

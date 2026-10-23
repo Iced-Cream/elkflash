@@ -434,7 +434,8 @@ class WaitTest(unittest.TestCase):
 
         def sleep(s):
             t[0] += s
-        return wait.wait_for_restart(find, open_pair, timeout=10, interval=1.0, clock=lambda: t[0], sleep=sleep,
+        kw.setdefault('timeout', 10)
+        return wait.wait_for_restart(find, open_pair, interval=1.0, clock=lambda: t[0], sleep=sleep,
                                      reply_timeout=0.001, **kw)
 
     def test_restart(self):
@@ -462,6 +463,18 @@ class WaitTest(unittest.TestCase):
         self.assertEqual((r.state, r.seconds), ("back", 2))
         self.assertEqual(sum("cannot be opened" in e for e in r.events), 1)
 
+    def test_virtual_port_restart(self):
+        # Measured in the analog-emu window over loopMIDI: the ports never go
+        # away; quiet for 6 s, a brief answer, quiet for 8 s, the new OS for good.
+        quiet = lambda: Booted(ping=False, screen=False)
+        script = [quiet] * 6 + [Booted] + [quiet] * 8 + [Booted]
+        r = self.run_wait(script, require_restart=True, timeout=30)
+        self.assertEqual((r.state, r.port_dropped, r.seconds), ("back", False, 21))
+        # An answer spell of up to 5 s in between is still the old OS.
+        r = self.run_wait([quiet] * 6 + [Booted] * 5 + [quiet] * 8 + [Booted],
+                          require_restart=True, timeout=40)
+        self.assertEqual((r.state, r.seconds), ("back", 25))
+
     def test_never_went_quiet(self):
         self.assertEqual(self.run_wait([Booted], require_restart=True).state, "no-restart")
 
@@ -483,6 +496,39 @@ class WaitTest(unittest.TestCase):
         rows = [raw[i * 2 + 1] for i in range(64)]
         self.assertEqual(rows[63], 0x80)
         self.assertEqual(sum(rows[:63]), 0)
+
+
+class QuietTest(unittest.TestCase):
+    def run_quiet(self, func, log=None):
+        import argparse, contextlib, io
+        from elkflash import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = cli._quietly(argparse.Namespace(func=func, log=log))
+        return rc, out.getvalue()
+
+    def test_one_line_and_a_log(self):
+        import os, tempfile
+
+        def work(args):
+            print("file: x.syx")
+            print("\r  1000/2000 bytes", end="")
+            print("\r  2000/2000 bytes")
+            print("back after 16 s: Analog Rytm, OS 1.74")
+            return 0
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "f.log")
+            rc, out = self.run_quiet(work, log)
+            self.assertEqual((rc, out), (0, "ok: back after 16 s: Analog Rytm, OS 1.74\n"))
+            self.assertIn("file: x.syx", open(log).read())
+
+    def test_failure_line(self):
+        def work(args):
+            print("refusing: not a stock bootstrap", file=sys.stderr)
+            return 2
+        import sys
+        rc, out = self.run_quiet(work)
+        self.assertEqual((rc, out), (2, "failed (exit 2): refusing: not a stock bootstrap\n"))
 
 
 class PortTest(unittest.TestCase):
