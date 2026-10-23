@@ -215,6 +215,30 @@ def cmd_upgrade(args) -> int:
     return 0
 
 
+def cmd_bootstrap(args) -> int:
+    """Print what elkflash sees of a file's bootstrap (for CONTRIBUTING.md)."""
+    import hashlib
+    fw = firmware.load(args.file)
+    print(f"file:       {args.file}")
+    print(f"file sha256: {hashlib.sha256(fw.data).hexdigest()}")
+    print(f"device:     SysEx device byte 0x{fw.device_byte:02X} ({fw.family})")
+    try:
+        cont = bootstrap.container(fw.data)
+        print(f"container:  {cont[:4].decode('ascii', 'replace')}, {len(cont)} bytes")
+        if cont[:4] == b"ELE3":
+            secs = bootstrap.sections(cont)
+            print(f"sections:   {', '.join(str(s) for s in secs)}")
+            if bootstrap.BOOTSTRAP_SECTION in secs:
+                boot = secs[bootstrap.BOOTSTRAP_SECTION]
+                print(f"bootstrap:  section 2, {len(boot)} bytes, "
+                      f"sha256 {hashlib.sha256(boot).hexdigest()}")
+    except (bootstrap.BootstrapError, ValueError) as e:
+        print(f"container:  cannot be read ({e})")
+    result = bootstrap.check(fw.data, fw.device_byte)
+    print(f"elkflash:   {'accepted' if result.ok else 'refused'}: {result.detail}")
+    return 0 if result.ok else 2
+
+
 def cmd_encode(args) -> int:
     """Write the requests elkflash would send as a .syx stream (for emulator tests)."""
     fw = firmware.load(args.file)
@@ -308,6 +332,10 @@ def main(argv=None) -> int:
                    help="skip the device's YES/NO prompt: the device flashes as soon as the "
                         "data is in (off by default; not with --force)")
     p.set_defaults(func=cmd_upgrade)
+
+    p = sub.add_parser("bootstrap", help="show a file's bootstrap hash and whether elkflash accepts it")
+    p.add_argument("file")
+    p.set_defaults(func=cmd_bootstrap)
 
     p = sub.add_parser("encode", help="write the upgrade requests to a .syx file (testing)")
     p.add_argument("file")

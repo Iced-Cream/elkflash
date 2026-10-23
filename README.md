@@ -81,8 +81,42 @@ OsUpgradeEnd(0), or a commit on an incomplete image, cancels.
 
 There is then no point where someone at the unit can refuse a wrong build, so
 `--no-confirm` cannot be combined with `--force`, and the confirmation question
-says that the device will flash at once. Keep a DIN MIDI interface and a stock
-OS at hand for the STARTUP-menu recovery.
+says that the device will flash at once.
+
+### Risks of `--no-confirm` on hardware
+
+The prompt is the device's own last check: the one moment where a person at
+the unit can refuse an OS before the flash is erased. Without it, these are the
+things that can go wrong, most likely first:
+
+1. **The device does not take the no-prompt path**, for example an OS version
+   that handles flag 0 differently, or a hang on "Waiting for confirm".
+   Nothing has been erased at that point: power-cycle and the old OS starts.
+   This is the likeliest failure and it is harmless.
+2. **A wrong or broken OS is written with nobody there to say NO.** elkflash
+   refuses a file made for another device, refuses any file whose bootstrap
+   is not stock, and the device validates the complete image before it
+   accepts the commit, so a damaged file is rejected before the erase. What
+   none of these catch is a well-formed OS you did not mean to send, such as
+   the wrong build for the right device. Check the file name before you run.
+3. **Power or USB is lost during the erase or write.** The same as in a
+   normal upgrade: the OS area is left half written. The bootstrap is not
+   touched by a failed write and elkflash only ever sends a stock one, so the
+   STARTUP-menu OS upgrade over DIN MIDI still works. That needs a DIN MIDI
+   interface, a stock `.syx` and a SysEx sender.
+4. **Data.** The device saves its working state before the erase and the new
+   OS loads it (seen in the emulator). Unsaved projects are at the same risk
+   as in any upgrade.
+
+Physical damage is not a realistic risk, and one upgrade's flash wear is
+negligible.
+
+Before using it: back up your projects, have the DIN interface, a stock OS
+and a SysEx sender ready, keep the unit on stable power, and do not unplug it
+until it has restarted and answers `elkflash info` again. The no-prompt path
+has been traced in the Analog Rytm MKII OS 1.74 and Analog Four MKII OS 1.56
+code and tested only on an A4 MKII; on other devices or OS versions, try it
+with the stock OS the unit already runs first.
 
 Checked in the analog-emu emulator (Rytm MKII 1.73 to 1.74, A4 MKII 1.56) and
 on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
@@ -107,6 +141,11 @@ on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
   the file and the device and sends nothing beyond Ping, SoftwareVersion and
   Query.
 - Ctrl-C during the transfer sends OsUpgradeEnd(0) to cancel.
+
+## Adding a stock release
+
+A stock release whose bootstrap elkflash does not know yet is refused. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to add its hash.
 
 ## Tests
 
