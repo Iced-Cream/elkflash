@@ -108,7 +108,8 @@ class FakeDevice(Transport):
         assert limit is None or 5 + len(req.args) <= limit, "message over the device's limit"
         if req.command == protocol.CMD_OS_UPGRADE_START:
             self.size = struct.unpack_from(">I", req.args)[0]
-            assert req.args[4:] == b"sysex\0\x01"
+            assert req.args[4:-1] == b"sysex\0"
+            self.flag = req.args[-1]
             if self.refuse:
                 self.reply(req, b"\x01" + self.refuse.encode() + b"\0")
             else:
@@ -144,7 +145,13 @@ class FakeDevice(Transport):
             self.reply(req, struct.pack(">IB", nxt, 1 if nxt == self.size else 0) + b"\0")
         elif req.command == protocol.CMD_OS_UPGRADE_END:
             self.ends.append(req.args)
-            self.reply(req, b"\x00\x00")
+            complete = len(self.received) == self.size
+            if req.args == b"\x01" and complete and self.flag == 0:
+                self.reply(req, b"\x00\x00")
+            elif req.args == b"\x00":
+                self.reply(req, b"\x00\x00")
+            else:
+                self.reply(req, b"\x02Upgrade canceled\x00")
 
     def receive(self, timeout):
         return self.outbox.popleft() if self.outbox else None
@@ -273,6 +280,34 @@ class LimitsTest(unittest.TestCase):
         self.assertEqual(bytes(dev.received), BIG)
         self.assertEqual(res.chunk_size, 8192)
         self.assertEqual(dev.lengths[:3], [32768, 16384, 8192])
+
+
+class NoConfirmTest(unittest.TestCase):
+    def test_default_asks_on_device(self):
+        dev = FakeDevice()
+        res = run(dev)
+        self.assertEqual(dev.flag, 1)
+        self.assertEqual(dev.ends, [])
+        self.assertFalse(res.committed)
+
+    def test_no_confirm_commits_after_last_chunk(self):
+        dev = FakeDevice()
+        res = run(dev, confirm_on_device=False)
+        self.assertEqual(dev.flag, 0)
+        self.assertEqual(bytes(dev.received), IMAGE)
+        self.assertEqual(dev.ends, [b"\x01"])
+        self.assertTrue(res.committed)
+
+    def test_rejected_commit_is_an_error(self):
+        class Refusing(FakeDevice):
+            def send(self, sysex):
+                req = protocol.Message.decode(protocol.unframe(sysex))
+                if req.command == protocol.CMD_OS_UPGRADE_END:
+                    self.reply(req, b"\x02Upgrade canceled\x00")
+                else:
+                    super().send(sysex)
+        with self.assertRaisesRegex(upgrade.UpgradeError, "Upgrade canceled"):
+            run(Refusing(), confirm_on_device=False)
 
 
 class RpcTest(unittest.TestCase):

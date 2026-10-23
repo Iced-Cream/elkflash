@@ -41,6 +41,9 @@ class UpgradeOptions:
     write_timeout: float = 10.0
     retries: int = 3
     rest: float = 0.0  # seconds between chunks; 0.05 like elektroid
+    # False: start flag 0 and OsUpgradeEnd(1) after the last chunk, so the
+    # device flashes without asking YES/NO (see confirm_on_device below).
+    confirm_on_device: bool = True
 
 
 @dataclass
@@ -81,6 +84,7 @@ class UpgradeResult:
     size: int
     chunk_size: int = 0
     chunks: int = 0
+    committed: bool = False
     resends: int = 0
     seconds: float = 0.0
     device_texts: list[str] = field(default_factory=list)
@@ -94,7 +98,8 @@ def run(client: RpcClient, image: bytes, options: UpgradeOptions | None = None,
     t0 = time.monotonic()
 
     reply = client.call(protocol.CMD_OS_UPGRADE_START,
-                        protocol.os_upgrade_start_args(size), opts.start_timeout)
+                        protocol.os_upgrade_start_args(size, flag=opts.confirm_on_device),
+                        opts.start_timeout)
     status = protocol.parse_status_reply(reply.args)
     if not status.ok:
         raise UpgradeError(f"device refused the upgrade: {status.text or 'no reason given'}")
@@ -153,8 +158,25 @@ def run(client: RpcClient, image: bytes, options: UpgradeOptions | None = None,
         abort(client)
         raise
 
+    if not opts.confirm_on_device:
+        commit(client, opts.start_timeout)
+        result.committed = True
     result.seconds = time.monotonic() - t0
     return result
+
+
+def commit(client: RpcClient, timeout: float) -> None:
+    """OsUpgradeEnd(1) after a start with flag 0: flash without the YES prompt.
+
+    With flag 0 a complete, valid image leaves the device "Waiting for confirm"
+    instead of asking UPGRADE OS NOW?. OsUpgradeEnd(1) then starts the erase
+    and write; the reply (status 0) comes first. On an incomplete image the
+    device cancels and answers with an error status.
+    """
+    reply = client.call(protocol.CMD_OS_UPGRADE_END, protocol.os_upgrade_end_args(True), timeout)
+    status = protocol.parse_status_reply(reply.args)
+    if not status.ok:
+        raise UpgradeError(f"device did not accept the commit: {status.text or 'no reason given'}")
 
 
 def abort(client: RpcClient) -> None:

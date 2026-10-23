@@ -157,6 +157,10 @@ def cmd_upgrade(args) -> int:
         print(f"limits:   sysex {_fmt(limits.sysex_size_max)}, file chunk "
               f"{_fmt(limits.file_chunk_size_max)} -> {chunk_size}-byte chunks")
 
+        if args.no_confirm and args.force:
+            _eprint("refusing: --no-confirm cannot be combined with --force")
+            return 2
+
         if args.dry_run:
             chunks = -(-len(fw.data) // chunk_size)
             print(f"dry run: would send OsUpgradeStart and {chunks} chunks of up to "
@@ -164,7 +168,11 @@ def cmd_upgrade(args) -> int:
             return 0
 
         if not args.yes:
-            answer = input("Flash this OS to the device? Type 'yes' to continue: ")
+            question = "Flash this OS to the device? "
+            if args.no_confirm:
+                question = ("Flash this OS WITHOUT the device's YES/NO prompt? The device "
+                            "erases and writes its flash as soon as the data is in. ")
+            answer = input(question + "Type 'yes' to continue: ")
             if answer.strip().lower() != "yes":
                 print("cancelled")
                 return 1
@@ -173,7 +181,8 @@ def cmd_upgrade(args) -> int:
                                       start_timeout=args.start_timeout,
                                       write_timeout=args.timeout,
                                       retries=args.retries,
-                                      rest=args.rest_ms / 1000)
+                                      rest=args.rest_ms / 1000,
+                                      confirm_on_device=not args.no_confirm)
         try:
             result = upgrade.run(client, fw.data, opts, _progress_printer())
         except KeyboardInterrupt:
@@ -188,8 +197,12 @@ def cmd_upgrade(args) -> int:
         print(f"note: chunks were reduced to {result.chunk_size} bytes after timeouts")
     print(f"sent {result.size} bytes in {result.chunks} chunks, {result.seconds:.1f} s "
           f"({rate:.1f} KiB/s), {result.resends} resends")
-    print("Press YES on the device to finish the OS upgrade (NO cancels); "
-          "it restarts when done.")
+    if result.committed:
+        print("Committed: the device is erasing and writing its flash now and restarts "
+              "by itself. Do not power it off or unplug it until it has restarted.")
+    else:
+        print("Press YES on the device to finish the OS upgrade (NO cancels); "
+              "it restarts when done.")
     return 0
 
 
@@ -282,6 +295,9 @@ def main(argv=None) -> int:
     p.add_argument("--chunk-size", type=int, help="bytes per write (default: from the device's limits; "
                    "2048 is what elektroid uses)")
     p.add_argument("--rest-ms", type=float, default=0.0, help="pause between chunks in ms (default 0; elektroid uses 50)")
+    p.add_argument("--no-confirm", action="store_true",
+                   help="skip the device's YES/NO prompt: the device flashes as soon as the "
+                        "data is in (off by default; not with --force)")
     p.set_defaults(func=cmd_upgrade)
 
     p = sub.add_parser("encode", help="write the upgrade requests to a .syx file (testing)")
