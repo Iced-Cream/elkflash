@@ -6,7 +6,7 @@ import argparse
 import sys
 import time
 
-from . import __version__, firmware, protocol, upgrade
+from . import __version__, bootstrap, firmware, protocol, upgrade
 from .rpc import RpcClient, RpcTimeout
 from .transport import PortPair, TransportError, list_ports, open_pair, pair_ports
 
@@ -123,6 +123,21 @@ def cmd_upgrade(args) -> int:
     fw = firmware.load(args.file)
     print(f"file:     {args.file}")
     print(f"          {len(fw.data)} bytes, {fw.messages} SysEx messages, for {fw.family}")
+
+    # Always: the upgrade rewrites the bootstrap, which holds the DIN recovery.
+    boot = bootstrap.check(fw.data, fw.device_byte)
+    print(f"bootstrap: {boot.detail}")
+    if not boot.ok:
+        if args.no_confirm and args.allow_modified_bootstrap:
+            _eprint("refusing: --allow-modified-bootstrap cannot be combined with --no-confirm")
+            return 2
+        if not args.allow_modified_bootstrap:
+            _eprint("refusing: the upgrade would replace the bootstrap, which runs the STARTUP "
+                    "menu and the DIN MIDI recovery, with one that is not known to be stock. "
+                    "Use --allow-modified-bootstrap only if you are sure.")
+            return 2
+        _eprint("warning: flashing a bootstrap that is not known to be stock "
+                "(--allow-modified-bootstrap)")
 
     pair = _pick_pair(args.port, args.in_port, args.out_port)
     with open_pair(pair) as t:
@@ -295,6 +310,9 @@ def main(argv=None) -> int:
     p.add_argument("--chunk-size", type=int, help="bytes per write (default: from the device's limits; "
                    "2048 is what elektroid uses)")
     p.add_argument("--rest-ms", type=float, default=0.0, help="pause between chunks in ms (default 0; elektroid uses 50)")
+    p.add_argument("--allow-modified-bootstrap", action="store_true",
+                   help="flash a file whose bootstrap is not a known stock one (refused by "
+                        "default; not with --no-confirm)")
     p.add_argument("--no-confirm", action="store_true",
                    help="skip the device's YES/NO prompt: the device flashes as soon as the "
                         "data is in (off by default; not with --force)")

@@ -91,6 +91,16 @@ on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
 ## Safety checks
 
 - The file must be a well-formed Elektron SysEx file for one device.
+- **Always: the bootstrap must be stock.** An OS upgrade rewrites the whole
+  container, including the bootstrap section, and the bootstrap runs the
+  STARTUP menu and the DIN MIDI recovery. elkflash reads the container out of
+  the .syx and compares the sha256 of section 2 with the bootstraps of stock
+  releases (Analog Four MKII 1.56, Analog Rytm MKII 1.73/1.74, Syntakt 1.42;
+  modified builds that keep the stock bootstrap pass). Older ELE2 files (the
+  MKI devices) have no section table and must be a known stock release as a
+  whole. Anything else is refused; `--allow-modified-bootstrap` overrides
+  this, and never together with `--no-confirm`. Only hashes are stored here,
+  never firmware.
 - The file's SysEx device byte must match the product id the device reports
   (`0x06` A4 MKI/AK, `0x07` AR MKI, `0x0B` A4 MKII, `0x0C` AR MKII, `0x16`
   Syntakt). Other files are refused unless `--force` is given.

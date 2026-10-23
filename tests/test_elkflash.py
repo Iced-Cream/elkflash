@@ -1,9 +1,10 @@
 import collections
+import hashlib
 import struct
 import unittest
 import zlib
 
-from elkflash import firmware, protocol, upgrade
+from elkflash import bootstrap, firmware, protocol, upgrade
 from elkflash.rpc import RpcClient, RpcTimeout
 from elkflash.transport import Transport, pair_ports
 
@@ -308,6 +309,78 @@ class NoConfirmTest(unittest.TestCase):
                     super().send(sysex)
         with self.assertRaisesRegex(upgrade.UpgradeError, "Upgrade canceled"):
             run(Refusing(), confirm_on_device=False)
+
+
+def make_ele3(device_byte=0x0C, boot=b"BOOT" * 100, others=((5, b"260930 10:48:13"), (3, b"MAIN" * 600))):
+    """A synthetic ELE3 .syx: sections at 16-byte boundaries, 101 bytes per data message."""
+    order = [others[0], (2, boot)] + list(others[1:])
+    table_end = 0x20 + 16 * len(order)
+    body = bytearray()
+    entries = []
+    at = table_end + (-table_end % 16)
+    for sid, data in order:
+        entries.append((sid, at + len(body), len(data), 0))
+        body += data + bytes(-len(data) % 16)
+    cont = bytearray(b"ELE3" + bytes(0x18))
+    cont += struct.pack(">I", len(order))
+    for e in entries:
+        cont += struct.pack(">IIII", *e)
+    cont += bytes(at - len(cont)) + body
+    stream = struct.pack(">II", len(cont), 0) + bytes(cont)
+    stream += bytes(-len(stream) % 101)
+    frame = bytes([0xF0, 0, 0x20, 0x3C, device_byte, 0, 0x7F, 1]) + bytes(7) + b"\xF7"
+    out = bytearray(frame)
+    for i in range(0, len(stream), 101):
+        packed = protocol.pack7(stream[i:i + 101])
+        assert len(packed) == 116
+        out += bytes([0xF0, 0, 0x20, 0x3C, device_byte, 0, 0x7E, 0, 0, 0]) + packed + b"\x00\xF7"
+    return bytes(out + frame)
+
+
+class BootstrapTest(unittest.TestCase):
+    def setUp(self):
+        self.saved = dict(bootstrap.STOCK_BOOTSTRAPS)
+        boot = b"BOOT" * 100
+        bootstrap.STOCK_BOOTSTRAPS[0x0C] = {hashlib.sha256(boot).hexdigest(): "test stock"}
+
+    def tearDown(self):
+        bootstrap.STOCK_BOOTSTRAPS.clear()
+        bootstrap.STOCK_BOOTSTRAPS.update(self.saved)
+
+    def test_reads_sections(self):
+        secs = bootstrap.sections(bootstrap.container(make_ele3()))
+        self.assertEqual(sorted(secs), [2, 3, 5])
+        self.assertEqual(secs[2], b"BOOT" * 100)
+        self.assertEqual(secs[3], b"MAIN" * 600)
+
+    def test_stock_bootstrap_passes(self):
+        r = bootstrap.check(make_ele3(), 0x0C)
+        self.assertTrue(r.ok, r.detail)
+
+    def test_modified_main_os_passes(self):
+        r = bootstrap.check(make_ele3(others=((5, b"x" * 15), (3, b"MODDED" * 500))), 0x0C)
+        self.assertTrue(r.ok, r.detail)
+
+    def test_edited_bootstrap_refused(self):
+        boot = bytearray(b"BOOT" * 100)
+        boot[123] ^= 1
+        r = bootstrap.check(make_ele3(boot=bytes(boot)), 0x0C)
+        self.assertFalse(r.ok)
+        self.assertIn("not a known stock", r.detail)
+
+    def test_unknown_device_refused(self):
+        self.assertFalse(bootstrap.check(make_ele3(device_byte=0x30), 0x30).ok)
+
+    def test_unreadable_container_refused(self):
+        r = bootstrap.check(make_syx(), 0x0C)
+        self.assertFalse(r.ok)
+
+    def test_known_tables_are_hashes(self):
+        for table in bootstrap.STOCK_BOOTSTRAPS.values():
+            for h in table:
+                self.assertRegex(h, "^[0-9a-f]{64}$")
+        for h in bootstrap.STOCK_FILES:
+            self.assertRegex(h, "^[0-9a-f]{64}$")
 
 
 class RpcTest(unittest.TestCase):
