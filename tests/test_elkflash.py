@@ -455,6 +455,13 @@ class WaitTest(unittest.TestCase):
                           require_restart=True)
         self.assertEqual((r.state, r.port_dropped, r.seconds), ("back", True, 8))
 
+    def test_open_failure_counts_as_gone(self):
+        def unopenable():
+            raise OSError("opening the MIDI output failed")
+        r = self.run_wait([Booted, unopenable, Booted], require_restart=True)
+        self.assertEqual((r.state, r.seconds), ("back", 2))
+        self.assertEqual(sum("cannot be opened" in e for e in r.events), 1)
+
     def test_never_went_quiet(self):
         self.assertEqual(self.run_wait([Booted], require_restart=True).state, "no-restart")
 

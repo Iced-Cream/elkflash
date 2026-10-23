@@ -128,13 +128,14 @@ def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0
             try:
                 with open_pair(pair) as t:
                     ping, version, screen = poll(t, reply_timeout)
+                opened = True
             except Exception:  # the port vanishing between find and open
-                screen = None
+                screen, opened = None, False
                 result.port_dropped = result.went_quiet = True
                 note("open-failed", "port listed but cannot be opened (restarting)")
             if screen:
                 result.screen = screen
-            if last == "open-failed":
+            if not opened:
                 pass
             elif ping:
                 note("answering", f"answering ({ping.name}, OS {version})")
