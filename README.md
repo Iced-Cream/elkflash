@@ -68,11 +68,12 @@ about 46 s of sleeping. elkflash sends 62 chunks of 30 KiB with no pause
 between them; `--rest-ms 50` adds elektroid's pacing back if a device ever
 needs it.
 
-Measured on a Rytm MKII (RH11, 2.06 MB, `--no-confirm`, 2026-10-23): elkflash's
-default sends 68 chunks in 7.2 s; with elektroid's pacing (`--chunk-size 2048
---rest-ms 50`) the same upgrade sends 1007 chunks in 55.0 s, 50 s of it pauses.
-With the erase, write and restart (about 15-16 s either way) that is about 23 s
-against 70 s from start to a working unit. elektroid also copies the size in OsUpgradeStart in host byte order
+Measured on a Rytm MKII with stock OS 1.74 over 1.74 (1.88 MB, `--no-confirm`,
+2026-10-23): elkflash's default sends 62 chunks in 6.5 s and the unit answers
+again 15.5 s later, about 22 s in all; with elektroid's pacing (`--chunk-size
+2048 --rest-ms 50`) it sends 919 chunks in 50.2 s, 46 s of it pauses, and the
+unit answers 13.2 s later, about 64 s in all. A larger modified build (2.06 MB)
+gave 7.2 s / 23 s against 55.0 s / 70 s. elektroid also copies the size in OsUpgradeStart in host byte order
 (little-endian on x86) and assumes the next offset; elkflash sends it
 big-endian and follows the offset in the device's reply.
 
