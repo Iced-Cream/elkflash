@@ -127,6 +127,9 @@ def cmd_upgrade(args) -> int:
     # Always: the upgrade rewrites the bootstrap, which holds the DIN recovery.
     boot = bootstrap.check(fw.data, fw.device_byte)
     print(f"bootstrap: {boot.detail}")
+    if fw.device_byte not in firmware.HARDWARE_TESTED:
+        _eprint(f"note: elkflash has not been tested on a {fw.family} yet "
+                "(see CONTRIBUTING.md, hardware tests)")
     if not boot.ok:
         # No override: a broken bootstrap can take the recovery path with it.
         _eprint("refusing: the upgrade would replace the bootstrap, which runs the STARTUP "

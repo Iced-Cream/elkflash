@@ -124,6 +124,30 @@ on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
 (2026-10-23, a modified 1.74 build with the stock bootstrap over itself: 68 chunks in
 7.2 s, back on USB 17 s after the commit).
 
+## Devices
+
+| Device | Stock bootstrap known | Flashed with elkflash on hardware |
+|---|---|---|
+| Analog Four MKII | OS 1.56 | yes (with and without `--no-confirm`) |
+| Analog Rytm MKII | OS 1.73, 1.74 | yes (with `--no-confirm`) |
+| Analog Four MKI / Analog Keys | OS 1.56 (stock file only) | no |
+| Analog Rytm MKI | OS 1.74 (stock file only) | no |
+| Analog Heat, Analog Heat MKII | OS 1.22 | no |
+| Analog Heat +FX | OS 1.02 | no |
+| Digitakt | OS 1.54 | no |
+| Digitakt II | OS 1.17 | no |
+| Digitone / Digitone Keys | OS 1.44 | no |
+| Digitone II | OS 1.12 | no |
+| Model:Cycles, Model:Samples | OS 1.13 | no |
+| Syntakt | OS 1.42 | no |
+
+Devices marked "no" pass elkflash's checks, and Transfer upgrades them over
+USB with the same commands, but nobody has flashed one with elkflash yet;
+elkflash prints a note when you use one. The product ids are elektroid's,
+matched by device name. Results are welcome: see CONTRIBUTING.md. The
+Octatrack, Machinedrum and Monomachine take their OS as plain SysEx, not
+through these commands, and are not supported.
+
 ## Safety checks
 
 - The file must be a well-formed Elektron SysEx file for one device.
@@ -131,8 +155,8 @@ on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
   container, including the bootstrap section, and the bootstrap runs the
   STARTUP menu and the DIN MIDI recovery. elkflash reads the container out of
   the .syx and compares the sha256 of section 2 with the bootstraps of stock
-  releases (Analog Four MKII 1.56, Analog Rytm MKII 1.73/1.74, Syntakt 1.42;
-  modified builds that keep the stock bootstrap pass). Older ELE2 files (the
+  releases (see Devices above; modified builds that keep the stock bootstrap
+  pass). Older ELE2 files (the
   MKI devices) have no section table and must be a known stock release as a
   whole. Anything else is refused, and there is no option to override
   this. Only hashes are stored here, never firmware.

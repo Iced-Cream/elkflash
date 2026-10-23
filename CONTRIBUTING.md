@@ -94,3 +94,30 @@ A contribution that lifts this would need to:
 Say in the pull request how you checked it (which stock releases and builds,
 and whether a unit was involved).
 
+## Open contribution: hardware tests
+
+elkflash has been flashed on hardware on an Analog Four MKII and an Analog
+Rytm MKII only. Every other device in the README's table passes its checks but
+is untested. A report from a unit is the most useful contribution there is.
+
+Before you start: back up your projects, have a DIN MIDI interface, the stock
+OS for the unit and a SysEx sender ready for the STARTUP-menu recovery, and
+keep the unit on stable power. Use the stock OS the unit already runs, so a
+problem cannot be a new OS's fault.
+
+1. `python -m elkflash info --port NAME`: the product id, the OS version and
+   whether the unit lists the OS upgrade commands.
+2. `python -m elkflash upgrade OS.syx --port NAME --dry-run`: the file and
+   the device are accepted, and nothing is sent.
+3. `python -m elkflash upgrade OS.syx --port NAME`: the normal upgrade. Press
+   YES on the unit; after it restarts, `info` should report the version again.
+4. Only if you are ready to recover over DIN: the same with `--no-confirm`,
+   without touching the unit. It should flash and restart by itself.
+
+Open an issue or a pull request (updating the README's table and
+`HARDWARE_TESTED` in `elkflash/firmware.py`) with: the device and OS version,
+the computer's OS, elkflash's full output for each step (chunk size, time,
+resends), how long the unit took to answer again, and anything the unit's
+screen showed that you did not expect. Report failures too: a unit that hangs
+before the erase, a refused commit or a timeout tells us as much as a pass.
+

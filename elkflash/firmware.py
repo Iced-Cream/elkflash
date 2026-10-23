@@ -11,15 +11,28 @@ from dataclasses import dataclass
 ELEKTRON_ID = bytes([0x00, 0x20, 0x3C])
 
 # Device byte at offset 4 of the OS .syx messages -> product ids the device
-# reports in its Ping reply (elektroid res/elektron/devices.json). Only pairs
-# checked against stock OS files are listed.
+# reports in its Ping reply (elektroid res/elektron/devices.json), matched by
+# the device named in Elektron's stock file.
 SYX_DEVICE_TO_PRODUCTS = {
     0x06: ({0x04, 0x06}, "Analog Four MKI / Analog Keys"),
     0x07: ({0x08}, "Analog Rytm MKI"),
+    0x08: ({0x0A}, "Analog Heat"),
+    0x0A: ({0x0C}, "Digitakt"),
     0x0B: ({0x0E}, "Analog Four MKII"),
     0x0C: ({0x10}, "Analog Rytm MKII"),
+    0x0D: ({0x14, 0x1C}, "Digitone / Digitone Keys"),
+    0x0E: ({0x16}, "Analog Heat MKII"),
+    0x0F: ({0x19}, "Model:Samples"),
+    0x11: ({0x1B}, "Model:Cycles"),
+    0x13: ({0x20}, "Analog Heat +FX"),
+    0x14: ({0x2A}, "Digitakt II"),
+    0x15: ({0x2B}, "Digitone II"),
     0x16: ({0x1E}, "Syntakt"),
 }
+
+# Devices elkflash has flashed on hardware; the others pass its checks but are
+# untested (CONTRIBUTING.md, "Open contribution: hardware tests").
+HARDWARE_TESTED = {0x0B, 0x0C}
 
 
 class FirmwareError(Exception):

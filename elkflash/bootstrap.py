@@ -29,6 +29,33 @@ BOOTSTRAP_SECTION = 2
 # sha256 of the stored bootstrap section (section 2) of stock releases, by
 # the files' SysEx device byte. Releases that share a bootstrap share a hash.
 STOCK_BOOTSTRAPS = {
+    0x08: {  # Analog Heat
+        "491e4a89732bb8b8011e1c3774c43a83e158cfa82bf9be351a63965a49544123": "OS 1.22",
+    },
+    0x0A: {  # Digitakt
+        "1e4a0473f963ce3f563c6533adecb8bb57b2f8c6a13861ff8327dabdeacbd48b": "OS 1.54",
+    },
+    0x0D: {  # Digitone / Digitone Keys
+        "ff8b24e006803ce39eb253f2f5f7ee210c58d292b2c578bb823c01c9a87aee39": "OS 1.44",
+    },
+    0x0E: {  # Analog Heat MKII
+        "a42a3b34e0967702ee6e47ea33f491a7a7a99cceae972e5f0e90077e2198f06e": "OS 1.22",
+    },
+    0x0F: {  # Model:Samples
+        "b897e4d5d79121e2213b56865fd48e82f9b53177c975a2a899611b2228cd1bad": "OS 1.13",
+    },
+    0x11: {  # Model:Cycles
+        "16a99b5d1a686a4a458c774aa670b08bfdcc04517600c2b6585d642fa9c065f3": "OS 1.13",
+    },
+    0x13: {  # Analog Heat +FX
+        "1da15afae081ad161f155681ba478810bfc02dd4167226e655c176c827084a02": "OS 1.02",
+    },
+    0x14: {  # Digitakt II
+        "ca3444bcc852454f26b09161457dcbbe902b8cd3867579e6e441832d325115f3": "OS 1.17",
+    },
+    0x15: {  # Digitone II
+        "669d8c50e9dd028662538016817d841dfac74cf68b2662e7de41b3927bc3275e": "OS 1.12",
+    },
     0x0B: {  # Analog Four MKII
         "16c8fa60dbc88415eae438b67263a760dc7191a34f65fed823161128c019a60b": "OS 1.56",
     },
