@@ -86,6 +86,12 @@ def cmd_info(args) -> int:
         client = RpcClient(t, log=_eprint if args.verbose else None)
         ping, version = _identify(client, args.timeout)
         limits = upgrade.query_limits(client, args.timeout)
+        screen = None
+        if args.screenshot:
+            try:
+                screen = wait.screenshot_png(client.call(wait.CMD_SCREENSHOT, b"", args.timeout).args)
+            except Exception as e:  # noqa: BLE001 - no picture is not a failure of `info`
+                screen = e
     print(f"port:     {pair.name}")
     print(f"device:   {ping.name} (product id 0x{ping.device_id:02X})")
     print(f"OS:       {version}")
@@ -95,6 +101,12 @@ def cmd_info(args) -> int:
     if ping.commands:
         ok = supported <= set(ping.commands)
         print(f"OS upgrade over USB: {'yes' if ok else 'not listed by the device'}")
+    if isinstance(screen, bytes):
+        with open(args.screenshot, "wb") as fh:
+            fh.write(screen)
+        print(f"screen:   {args.screenshot}")
+    elif args.screenshot:
+        print(f"screen:   no picture ({screen})")
     return 0
 
 
@@ -353,6 +365,7 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("info", help="ping the device and show its name and OS version")
     common(p)
+    p.add_argument("--screenshot", help="also save the device's screen (PNG); read-only")
     p.set_defaults(func=cmd_info)
 
     p = sub.add_parser("upgrade", help="flash an OS .syx file")
