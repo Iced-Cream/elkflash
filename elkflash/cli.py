@@ -128,16 +128,10 @@ def cmd_upgrade(args) -> int:
     boot = bootstrap.check(fw.data, fw.device_byte)
     print(f"bootstrap: {boot.detail}")
     if not boot.ok:
-        if args.no_confirm and args.allow_modified_bootstrap:
-            _eprint("refusing: --allow-modified-bootstrap cannot be combined with --no-confirm")
-            return 2
-        if not args.allow_modified_bootstrap:
-            _eprint("refusing: the upgrade would replace the bootstrap, which runs the STARTUP "
-                    "menu and the DIN MIDI recovery, with one that is not known to be stock. "
-                    "Use --allow-modified-bootstrap only if you are sure.")
-            return 2
-        _eprint("warning: flashing a bootstrap that is not known to be stock "
-                "(--allow-modified-bootstrap)")
+        # No override: a broken bootstrap can take the recovery path with it.
+        _eprint("refusing: the upgrade would replace the bootstrap, which runs the STARTUP "
+                "menu and the DIN MIDI recovery, with one that is not known to be stock")
+        return 2
 
     pair = _pick_pair(args.port, args.in_port, args.out_port)
     with open_pair(pair) as t:
@@ -310,9 +304,6 @@ def main(argv=None) -> int:
     p.add_argument("--chunk-size", type=int, help="bytes per write (default: from the device's limits; "
                    "2048 is what elektroid uses)")
     p.add_argument("--rest-ms", type=float, default=0.0, help="pause between chunks in ms (default 0; elektroid uses 50)")
-    p.add_argument("--allow-modified-bootstrap", action="store_true",
-                   help="flash a file whose bootstrap is not a known stock one (refused by "
-                        "default; not with --no-confirm)")
     p.add_argument("--no-confirm", action="store_true",
                    help="skip the device's YES/NO prompt: the device flashes as soon as the "
                         "data is in (off by default; not with --force)")
