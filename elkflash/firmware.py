@@ -32,7 +32,7 @@ SYX_DEVICE_TO_PRODUCTS = {
 
 # Devices elkflash has flashed on hardware; the others pass its checks but are
 # untested (CONTRIBUTING.md, "Open contribution: hardware tests").
-HARDWARE_TESTED = {0x0B, 0x0C}
+HARDWARE_TESTED = {0x0B, 0x0C, 0x0D}  # 0x0D: a Digitone; the Keys is untested
 
 
 class FirmwareError(Exception):

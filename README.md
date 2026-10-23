@@ -136,7 +136,8 @@ on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
 | Analog Heat +FX | OS 1.02 | no |
 | Digitakt | OS 1.54 | no |
 | Digitakt II | OS 1.17 | no |
-| Digitone / Digitone Keys | OS 1.44 | no |
+| Digitone | OS 1.44 | yes (with and without `--no-confirm`) |
+| Digitone Keys | OS 1.44 | no (same file as the Digitone) |
 | Digitone II | OS 1.12 | no |
 | Model:Cycles, Model:Samples | OS 1.13 | no |
 | Syntakt | OS 1.42 | no |
@@ -193,6 +194,9 @@ then a modified build (47 chunks, 13.6 s; it booted and reported its own
 version), then stock 1.56 back (42 chunks, 12.4 s). Every run had 0 resends,
 and each one ended with the device's YES prompt and a restart into the new OS.
 These runs used 32 KiB chunks, before the message limit above was found.
+A Digitone (2026-10-23): stock 1.43 to 1.44 with the YES prompt (55 chunks of
+30 KiB in 4.1 s, back on USB 16 s later), then 1.44 over 1.44 with
+`--no-confirm` (4.1 s, back 20 s after the commit, no key pressed).
 
 ## Licence
 
