@@ -124,7 +124,8 @@ on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
 (2026-10-23, a modified 1.74 build with the stock bootstrap over itself: 68 chunks in
 7.2 s, back on USB 17 s after the commit; then three runs with the YES prompt,
 68 chunks in 7.2 s each, erase and write shown on the unit, restart a few
-seconds after YES).
+seconds after YES). Timed with `--no-confirm`: transfer and commit 7.5 s, USB drops for the
+restart 12.9 s after the commit, answering again at 15.7 s, about 23 s in all.
 
 ## Devices
 
