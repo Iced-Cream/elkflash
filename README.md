@@ -115,12 +115,14 @@ Before using it: back up your projects, have the DIN interface, a stock OS
 and a SysEx sender ready, keep the unit on stable power, and do not unplug it
 until it has restarted and answers `elkflash info` again. The no-prompt path
 has been traced in the Analog Rytm MKII OS 1.74 and Analog Four MKII OS 1.56
-code and tested only on an A4 MKII; on other devices or OS versions, try it
+code and tested on an A4 MKII and a Rytm MKII; on other devices or OS versions, try it
 with the stock OS the unit already runs first.
 
 Checked in the analog-emu emulator (Rytm MKII 1.73 to 1.74, A4 MKII 1.56) and
 on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
-12.0 s, back on USB 22 s after the commit, no key pressed).
+12.0 s, back on USB 22 s after the commit, no key pressed) and on an Analog Rytm MKII
+(2026-10-23, a modified 1.74 build with the stock bootstrap over itself: 68 chunks in
+7.2 s, back on USB 17 s after the commit).
 
 ## Safety checks
 
