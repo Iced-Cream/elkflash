@@ -217,7 +217,7 @@ def cmd_upgrade(args) -> int:
               "it restarts when done.")
     if args.wait:
         timeout = args.wait_timeout if args.no_confirm else args.wait_timeout + 120
-        return _wait(args, pair.name, timeout, require_drop=True)
+        return _wait(args, pair.name, timeout, require_restart=True)
     return 0
 
 
@@ -233,10 +233,10 @@ def _find_again(args, name):
     return find
 
 
-def _wait(args, name, timeout, require_drop=False) -> int:
+def _wait(args, name, timeout, require_restart=False) -> int:
     print(f"waiting up to {timeout:.0f} s for the device to restart and answer ...")
     result = wait.wait_for_restart(_find_again(args, name), open_pair, timeout=timeout,
-                                   require_drop=require_drop, log=lambda m: print("  " + m))
+                                   require_restart=require_restart, log=lambda m: print("  " + m))
     print(result.summary())
     if result.screen and args.screenshot:
         with open(args.screenshot, "wb") as f:
@@ -247,7 +247,7 @@ def _wait(args, name, timeout, require_drop=False) -> int:
 
 def cmd_wait(args) -> int:
     """Wait for a device to answer, e.g. after an upgrade started elsewhere."""
-    return _wait(args, args.port, args.timeout_total, require_drop=args.require_restart)
+    return _wait(args, args.port, args.timeout_total, require_restart=args.require_restart)
 
 
 def cmd_bootstrap(args) -> int:
@@ -379,7 +379,7 @@ def main(argv=None) -> int:
     common(p)
     p.add_argument("--timeout-total", type=float, default=90.0, help="seconds to wait (default 90)")
     p.add_argument("--require-restart", action="store_true",
-                   help="count an answer only after the port has gone away once")
+                   help="count an answer only after the device has gone quiet once (port gone or no reply)")
     p.add_argument("--screenshot", help="save the last screen the device sent (PNG)")
     p.set_defaults(func=cmd_wait)
 

@@ -434,18 +434,29 @@ class WaitTest(unittest.TestCase):
 
         def sleep(s):
             t[0] += s
-        return wait.wait_for_restart(find, open_pair, timeout=10, clock=lambda: t[0], sleep=sleep,
+        return wait.wait_for_restart(find, open_pair, timeout=10, interval=1.0, clock=lambda: t[0], sleep=sleep,
                                      reply_timeout=0.001, **kw)
 
     def test_restart(self):
         silent = lambda: Booted(ping=False, screen=False)
-        r = self.run_wait([silent, silent, None, None, Booted], require_drop=True)
+        r = self.run_wait([silent, silent, None, None, Booted], require_restart=True)
         self.assertEqual((r.state, r.version, r.port_dropped, r.seconds), ("back", "1.74", True, 4))
 
     def test_old_session_does_not_count(self):
-        r = self.run_wait([Booted, Booted, None, Booted], require_drop=True)
+        r = self.run_wait([Booted, Booted, None, Booted], require_restart=True)
         self.assertEqual((r.state, r.seconds), ("back", 3))
-        self.assertIn("answers before restart", r.events)
+
+    def test_answers_while_flashing_do_not_count(self):
+        # Measured on a Rytm MKII: Ping on and off while it writes (screen
+        # answering), the port gone for about 3 s, then the new OS.
+        busy = lambda: Booted(ping=False)
+        quiet = lambda: Booted(ping=False, screen=False)
+        r = self.run_wait([Booted, busy, Booted, busy, Booted, None, None, quiet, Booted],
+                          require_restart=True)
+        self.assertEqual((r.state, r.port_dropped, r.seconds), ("back", True, 8))
+
+    def test_never_went_quiet(self):
+        self.assertEqual(self.run_wait([Booted], require_restart=True).state, "no-restart")
 
     def test_stuck_keeps_last_screen(self):
         r = self.run_wait([lambda: Booted(ping=False)])

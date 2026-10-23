@@ -1,13 +1,17 @@
 """Wait for a device to come back after an OS upgrade, and tell a stuck one
 from a slow one.
 
-After the last chunk the device erases and writes its flash, then restarts:
-its USB MIDI port goes away and comes back, and the new OS answers Ping again
-(about 16 s after the last chunk on an A4 MKII and a Rytm MKII). A unit that
-hangs on its "rebooting" screen never leaves USB and never answers; only a
-power cycle helps. So each poll looks at three things: is the port there, does
-the device answer Ping, and does it answer Screenshot (the screen request
-elektron-screen-tool uses), which is saved as evidence when it does.
+Measured on a Rytm MKII (Overbridge mode, 30 KiB chunks, no prompt): for about
+10 s after the commit, while it erases and writes, the device keeps answering
+Screenshot and answers Ping on and off; then its USB MIDI port is gone for
+about 3 s (the restart), and the new OS answers Ping from about 16 s. So an
+answer counts as "back" only after the port has been seen gone (or could not
+be opened), and polls are short (0.3 s replies, 0.25 s apart) so a 3 s gap is
+not missed. A unit that hangs on its "rebooting" screen never leaves USB and
+stops answering; only a power cycle helps. Each poll looks at three things: is
+the port there, does the device answer Ping, and, when it does not, does it
+answer Screenshot (the screen request elektron-screen-tool uses), saved as
+evidence.
 """
 
 from __future__ import annotations
@@ -25,11 +29,12 @@ CMD_SCREENSHOT = 0x04
 
 @dataclass
 class WaitResult:
-    state: str  # "back", "stuck", "gone", "silent"
+    state: str  # "back", "stuck", "gone", "silent", "no-restart"
     seconds: float = 0.0
     version: str | None = None
     name: str | None = None
     port_dropped: bool = False
+    went_quiet: bool = False
     screen: bytes | None = None  # PNG of the last screen the device sent
     events: list[str] = field(default_factory=list)
 
@@ -43,6 +48,9 @@ class WaitResult:
         if self.state == "gone":
             return (f"the port has not come back in {self.seconds:.0f} s: the device is still "
                     "writing, switched off, or failed to boot")
+        if self.state == "no-restart":
+            return (f"the device is still answering after {self.seconds:.0f} s and its port never "
+                    "went away: it has not restarted (was the upgrade committed?)")
         return (f"the port came back but the device has not answered for {self.seconds:.0f} s "
                 "(an OS that does not speak the RPC, or a hung boot)")
 
@@ -69,13 +77,15 @@ def screenshot_png(args: bytes, scale: int = 4) -> bytes:
             + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
-def poll(transport, timeout: float = 1.0):
-    """-> (ping reply or None, version or None, screenshot PNG or None)."""
+def poll(transport, timeout: float = 0.3):
+    """-> (ping reply or None, version or None, screenshot PNG or None).
+    The screen is asked for only when Ping gets no answer."""
     client = RpcClient(transport, first_seq=0x700)
     ping = version = screen = None
     try:
         ping = protocol.parse_ping_reply(client.call(protocol.CMD_PING, b"", timeout).args)
         version = protocol.parse_version_reply(client.call(protocol.CMD_SOFTWARE_VERSION, b"", timeout).args)
+        return ping, version, None
     except (RpcTimeout, protocol.ProtocolError):
         pass
     try:
@@ -85,57 +95,63 @@ def poll(transport, timeout: float = 1.0):
     return ping, version, screen
 
 
-def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 1.0,
-                     settle: float = 0.0, require_drop: bool = False, reply_timeout: float = 1.0, log=None,
+def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0.25,
+                     require_restart: bool = False, reply_timeout: float = 0.3, log=None,
                      clock=time.monotonic, sleep=time.sleep) -> WaitResult:
     """Poll until the device answers Ping, or `timeout` s pass.
 
     find() returns the device's PortPair or None when it is not on USB;
     open_pair(pair) opens it. The port is opened afresh on every poll, since a
-    restart invalidates the old handle. With settle > 0 the first poll waits
-    that long. With require_drop an answer counts only after the port has gone
-    away once (a real restart); an answer before that is the old session.
+    restart invalidates the old handle. With require_restart an answer counts
+    only after the port has been gone (or failed to open) once; answers before
+    that come from the old OS while it flashes.
     """
     t0 = clock()
     result = WaitResult("gone")
-    present_before = None
-    sleep(settle)
-    while True:
-        now = clock() - t0
-        pair = find()
-        present = pair is not None
-        if present_before is not None and present != present_before:
-            result.events.append(f"{now:5.1f} s  port {'back' if present else 'gone'}")
+    last = None
+
+    def note(state, text):
+        nonlocal last
+        if state != last:
+            last = state
+            result.events.append(f"{clock() - t0:5.1f} s  {text}")
             if log:
                 log(result.events[-1])
-        if not present:
-            result.port_dropped = True
-        present_before = present
-        if present:
+
+    while True:
+        pair = find()
+        ping = version = None
+        if pair is None:
+            result.port_dropped = result.went_quiet = True
+            note("gone", "port gone")
+        else:
             try:
                 with open_pair(pair) as t:
                     ping, version, screen = poll(t, reply_timeout)
-            except Exception as e:  # the port can vanish between find and open
-                ping = version = screen = None
-                result.events.append(f"{now:5.1f} s  open failed: {e}")
+            except Exception:  # the port vanishing between find and open
+                screen = None
+                result.port_dropped = result.went_quiet = True
+                note("open-failed", "port listed but cannot be opened (restarting)")
             if screen:
                 result.screen = screen
-            if ping and require_drop and not result.port_dropped:
-                if "answers before restart" not in result.events:
-                    result.events.append("answers before restart")
-                    if log:
-                        log(f"{now:5.1f} s  still answering ({ping.name}, OS {version}); "
-                            "waiting for the restart")
-                ping = None
-            if ping:
-                result.state, result.name, result.version = "back", ping.name, version
-                result.seconds = clock() - t0
-                return result
+            if last == "open-failed":
+                pass
+            elif ping:
+                note("answering", f"answering ({ping.name}, OS {version})")
+                if not require_restart or result.port_dropped:
+                    result.state, result.name, result.version = "back", ping.name, version
+                    result.seconds = clock() - t0
+                    return result
+            else:
+                result.went_quiet = True
+                note("quiet", "port there, no answer" + (" (screen answers)" if screen else ""))
         if clock() - t0 >= timeout:
             result.seconds = clock() - t0
-            if present and not result.port_dropped:
+            if ping and not result.port_dropped:
+                result.state = "no-restart"
+            elif pair is not None and not result.port_dropped:
                 result.state = "stuck"
-            elif present:
+            elif pair is not None:
                 result.state = "silent"
             else:
                 result.state = "gone"
