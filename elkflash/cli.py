@@ -149,8 +149,10 @@ def cmd_upgrade(args) -> int:
         if args.chunk_size:
             chunk_size = args.chunk_size
             cap = protocol.max_write_chunk(limits.sysex_size_max or 65536)
+            if limits.file_chunk_size_max:
+                cap = min(cap, protocol.max_write_data(limits.file_chunk_size_max))
             if chunk_size > cap:
-                _eprint(f"--chunk-size {chunk_size} does not fit in one SysEx; using {cap}")
+                _eprint(f"--chunk-size {chunk_size} is over the device's limits; using {cap}")
                 chunk_size = cap
         print(f"limits:   sysex {_fmt(limits.sysex_size_max)}, file chunk "
               f"{_fmt(limits.file_chunk_size_max)} -> {chunk_size}-byte chunks")

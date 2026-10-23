@@ -103,6 +103,9 @@ class FakeDevice(Transport):
 
     def send(self, sysex):
         req = protocol.Message.decode(protocol.unframe(sysex))
+        limit = self.limits.get(protocol.KEY_FILE_CHUNK_SIZE_MAX)
+        # A real device overruns a buffer when a message is over this limit.
+        assert limit is None or 5 + len(req.args) <= limit, "message over the device's limit"
         if req.command == protocol.CMD_OS_UPGRADE_START:
             self.size = struct.unpack_from(">I", req.args)[0]
             assert req.args[4:] == b"sysex\0\x01"
@@ -228,7 +231,7 @@ class LimitsTest(unittest.TestCase):
         self.assertIsNone(protocol.parse_query_reply(b"\x00"))
 
     def test_chunk_choice(self):
-        self.assertEqual(upgrade.DeviceLimits(65536, 32768).chunk_size(), 32768)
+        self.assertEqual(upgrade.DeviceLimits(65536, 32768).chunk_size(), 30720)  # 32751 rounded down
         self.assertEqual(upgrade.DeviceLimits(None, None).chunk_size(), 2048)
         self.assertEqual(upgrade.DeviceLimits(65536, None).chunk_size(), 2048)  # no chunk limit: stay at 2 KiB
         self.assertEqual(upgrade.DeviceLimits(4096, 32768).chunk_size(), 2048)
@@ -253,8 +256,15 @@ class LimitsTest(unittest.TestCase):
         size = upgrade.query_limits(client).chunk_size()
         res = upgrade.run(client, BIG, upgrade.UpgradeOptions(chunk_size=size, write_timeout=0.05))
         self.assertEqual(bytes(dev.received), BIG)
-        self.assertEqual(res.chunks, 7)  # 6 x 32768 + 4192
-        self.assertEqual(max(dev.lengths), 32768)
+        self.assertEqual(res.chunks, 7)  # 6 x 30720 + 16480
+        self.assertEqual(max(dev.lengths), 30720)
+
+    def test_message_limit(self):
+        # 32751 data bytes + 12 write fields + 5 header = 32768, the limit.
+        self.assertEqual(protocol.max_write_data(32768), 32751)
+        n = protocol.max_write_data(32768)
+        msg = protocol.Message(1, 0, 0x51, protocol.os_upgrade_write_args(0, bytes(n))).encode()
+        self.assertEqual(len(msg), 32768)
 
     def test_halves_chunk_on_timeout(self):
         dev = FakeDevice(max_chunk=32768, mute_above=8192)

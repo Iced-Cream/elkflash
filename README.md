@@ -46,16 +46,25 @@ of real devices and of the analog-emu emulator.
 
 Before writing, elkflash asks for `midi.rpc_file_chunk_size_max` and
 `midi.sysex_size_max`. An A4 MKII (OS 1.56) and a Rytm MKII both answer 32768
-and 65536, so elkflash writes 32 KiB per request: the largest multiple of
-2 KiB within both limits. A device that reports no limits gets 2 KiB, the size
-elektroid uses; `--chunk-size 2048` forces it. If a big chunk gets no reply,
-elkflash resends it at half the size, down to 2 KiB.
+and 65536. The first limit is for the whole decoded message (5-byte header,
+12 bytes of write fields and the data), so a write may carry at most 32751
+data bytes; elkflash writes 30 KiB per request, the largest multiple of 2 KiB
+within both limits. A device that reports no limits gets 2 KiB, the size
+elektroid uses; `--chunk-size 2048` forces it, and larger values are capped at
+the limits. If a big chunk gets no reply, elkflash resends it at half the
+size, down to 2 KiB.
+
+Going over the limit is not refused by the device. In the emulated Rytm MKII
+(OS 1.74) a write of 32752 data bytes, one over, is acknowledged normally but
+overruns the receive buffer and overwrites unrelated memory; 32751 does not.
+elkflash 0.1.0 sent 32 KiB chunks, 17 bytes over: upgrade with a later
+version.
 
 ### Compared with `elektroid-cli upgrade`
 
 elektroid sends 2 KiB chunks and sleeps 50 ms after every acknowledged one
 (`BE_REST_TIME_US`). For a 1.88 MB Rytm MKII OS that is 919 round trips and
-about 46 s of sleeping. elkflash sends 58 chunks of 32 KiB with no pause
+about 46 s of sleeping. elkflash sends 62 chunks of 30 KiB with no pause
 between them; `--rest-ms 50` adds elektroid's pacing back if a device ever
 needs it. elektroid also copies the size in OsUpgradeStart in host byte order
 (little-endian on x86) and assumes the next offset; elkflash sends it
@@ -82,14 +91,16 @@ limits, chunk halving).
 
 In the analog-emu emulator (Rytm MKII, with a writable SPI flash, over
 loopMIDI: `--in-port "rytm-emu usb out" --out-port "rytm-emu usb in"`),
-elkflash upgraded OS 1.73 to 1.74: 58 chunks, 0 resends, 2.7 s; the emulated
-unit showed the YES/NO prompt, wrote the flash and rebooted into 1.74.
+elkflash upgraded OS 1.73 to 1.74 (with 32 KiB chunks: 58 chunks, 0 resends,
+2.7 s); the emulated unit showed the YES/NO prompt, wrote the flash and
+rebooted into 1.74.
 
 On hardware (2026-10-22, an A4 MKII on OS 1.56, with a Rytm MKII connected
 at the same time for the last run): stock 1.56 over 1.56 (42 chunks, 12.3 s),
 then a modified build (47 chunks, 13.6 s; it booted and reported its own
 version), then stock 1.56 back (42 chunks, 12.4 s). Every run had 0 resends,
 and each one ended with the device's YES prompt and a restart into the new OS.
+These runs used 32 KiB chunks, before the message limit above was found.
 
 ## Licence
 

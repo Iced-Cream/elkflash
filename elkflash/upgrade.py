@@ -52,7 +52,9 @@ class DeviceLimits:
         """The OS chunk to use: within both limits, a multiple of 0x800."""
         if not self.file_chunk_size_max and not self.sysex_size_max:
             return protocol.OS_CHUNK_SIZE
-        size = self.file_chunk_size_max or protocol.OS_CHUNK_SIZE
+        size = protocol.OS_CHUNK_SIZE
+        if self.file_chunk_size_max:
+            size = protocol.max_write_data(self.file_chunk_size_max)
         if self.sysex_size_max:
             size = min(size, protocol.max_write_chunk(self.sysex_size_max))
         size -= size % protocol.OS_CHUNK_SIZE

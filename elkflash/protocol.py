@@ -139,6 +139,17 @@ def framed_size(message_size: int) -> int:
     return len(SYSEX_HEADER) + message_size + -(-message_size // 7) + 1
 
 
+def max_write_data(message_size_max: int) -> int:
+    """Largest OsUpgradeWrite data length for a decoded-message limit.
+
+    midi.rpc_file_chunk_size_max bounds the whole decoded message (5-byte
+    header, 12 bytes of write fields, data): in the emulated Rytm MKII OS 1.74
+    a write of 32751 data bytes (a 32768-byte message) is fine and one of
+    32752 overruns the buffer and corrupts unrelated memory.
+    """
+    return max(message_size_max - 5 - WRITE_HEADER_SIZE, 0)
+
+
 def max_write_chunk(sysex_size_max: int) -> int:
     """Largest OsUpgradeWrite data length whose SysEx fits in sysex_size_max."""
     n = sysex_size_max
