@@ -6,7 +6,7 @@ import argparse
 import sys
 import time
 
-from . import __version__, bootstrap, firmware, protocol, upgrade
+from . import __version__, bootstrap, firmware, protocol, upgrade, wait
 from .rpc import RpcClient, RpcTimeout
 from .transport import PortPair, TransportError, list_ports, open_pair, pair_ports
 
@@ -215,7 +215,39 @@ def cmd_upgrade(args) -> int:
     else:
         print("Press YES on the device to finish the OS upgrade (NO cancels); "
               "it restarts when done.")
+    if args.wait:
+        timeout = args.wait_timeout if args.no_confirm else args.wait_timeout + 120
+        return _wait(args, pair.name, timeout, require_drop=True)
     return 0
+
+
+def _find_again(args, name):
+    """The device's port pair now, or None while it is off USB."""
+    def find():
+        try:
+            if args.in_port or args.out_port:
+                return _pick_pair(None, args.in_port, args.out_port)
+            return _pick_pair(args.port or name)
+        except SystemExit:
+            return None
+    return find
+
+
+def _wait(args, name, timeout, require_drop=False) -> int:
+    print(f"waiting up to {timeout:.0f} s for the device to restart and answer ...")
+    result = wait.wait_for_restart(_find_again(args, name), open_pair, timeout=timeout,
+                                   require_drop=require_drop, log=lambda m: print("  " + m))
+    print(result.summary())
+    if result.screen and args.screenshot:
+        with open(args.screenshot, "wb") as f:
+            f.write(result.screen)
+        print(f"last screen the device sent: {args.screenshot}")
+    return 0 if result.state == "back" else 3
+
+
+def cmd_wait(args) -> int:
+    """Wait for a device to answer, e.g. after an upgrade started elsewhere."""
+    return _wait(args, args.port, args.timeout_total, require_drop=args.require_restart)
 
 
 def cmd_bootstrap(args) -> int:
@@ -334,7 +366,22 @@ def main(argv=None) -> int:
     p.add_argument("--no-confirm", action="store_true",
                    help="skip the device's YES/NO prompt: the device flashes as soon as the "
                         "data is in (off by default; not with --force)")
+    p.add_argument("--wait", action="store_true",
+                   help="after sending, wait for the restart and report the new OS, or a device "
+                        "that is stuck (exit code 3)")
+    p.add_argument("--wait-timeout", type=float, default=90.0,
+                   help="seconds --wait allows for the restart (default 90; +120 for the YES press)")
+    p.add_argument("--screenshot", help="with --wait: save the last screen the device sent (PNG)")
     p.set_defaults(func=cmd_upgrade)
+
+    p = sub.add_parser("wait", help="wait until the device answers again (after an upgrade); "
+                                    "exit code 3 if it does not")
+    common(p)
+    p.add_argument("--timeout-total", type=float, default=90.0, help="seconds to wait (default 90)")
+    p.add_argument("--require-restart", action="store_true",
+                   help="count an answer only after the port has gone away once")
+    p.add_argument("--screenshot", help="save the last screen the device sent (PNG)")
+    p.set_defaults(func=cmd_wait)
 
     p = sub.add_parser("bootstrap", help="show a file's bootstrap hash and whether elkflash accepts it")
     p.add_argument("file")

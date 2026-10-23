@@ -4,7 +4,7 @@ import struct
 import unittest
 import zlib
 
-from elkflash import bootstrap, firmware, protocol, upgrade
+from elkflash import bootstrap, firmware, protocol, upgrade, wait
 from elkflash.rpc import RpcClient, RpcTimeout
 from elkflash.transport import Transport, pair_ports
 
@@ -397,6 +397,74 @@ class RpcTest(unittest.TestCase):
     def test_sequence_wraps(self):
         c = RpcClient(None, first_seq=0xFFFF)
         self.assertEqual([c.next_seq(), c.next_seq()], [0xFFFF, 0])
+
+
+class Booted(Transport):
+    """A device that answers Ping, SoftwareVersion and Screenshot (or not)."""
+
+    def __init__(self, ping=True, screen=True):
+        self.outbox = collections.deque()
+        self.ping, self.screen = ping, screen
+
+    def send(self, sysex):
+        req = protocol.Message.decode(protocol.unframe(sysex))
+        args = None
+        if req.command == protocol.CMD_PING and self.ping:
+            args = bytes([0x10, 0]) + b"Analog Rytm MKII\0"
+        elif req.command == protocol.CMD_SOFTWARE_VERSION and self.ping:
+            args = b"0174\x001.74\x00"
+        elif req.command == wait.CMD_SCREENSHOT and self.screen:
+            args = struct.pack(">BHHI", 1, 128, 64, 1024) + bytes([0x80]) + bytes(1023)
+        if args is not None:
+            self.outbox.append(protocol.frame(protocol.Message(0, req.seq, req.command | 0x80, args).encode()))
+
+    def receive(self, timeout):
+        return self.outbox.popleft() if self.outbox else None
+
+
+class WaitTest(unittest.TestCase):
+    """A fake clock: each poll is one second; `script` says what the device is
+    doing at each second (None = off USB, else a transport factory)."""
+
+    def run_wait(self, script, **kw):
+        t = [0.0]
+        pair = object()
+        find = lambda: pair if script[min(int(t[0]), len(script) - 1)] else None
+        open_pair = lambda _p: script[min(int(t[0]), len(script) - 1)]()
+
+        def sleep(s):
+            t[0] += s
+        return wait.wait_for_restart(find, open_pair, timeout=10, clock=lambda: t[0], sleep=sleep,
+                                     reply_timeout=0.001, **kw)
+
+    def test_restart(self):
+        silent = lambda: Booted(ping=False, screen=False)
+        r = self.run_wait([silent, silent, None, None, Booted], require_drop=True)
+        self.assertEqual((r.state, r.version, r.port_dropped, r.seconds), ("back", "1.74", True, 4))
+
+    def test_old_session_does_not_count(self):
+        r = self.run_wait([Booted, Booted, None, Booted], require_drop=True)
+        self.assertEqual((r.state, r.seconds), ("back", 3))
+        self.assertIn("answers before restart", r.events)
+
+    def test_stuck_keeps_last_screen(self):
+        r = self.run_wait([lambda: Booted(ping=False)])
+        self.assertEqual(r.state, "stuck")
+        self.assertTrue(r.screen.startswith(b"\x89PNG"))
+        self.assertIn("stuck", r.summary())
+
+    def test_gone_and_silent(self):
+        self.assertEqual(self.run_wait([None]).state, "gone")
+        quiet = lambda: Booted(ping=False, screen=False)
+        self.assertEqual(self.run_wait([quiet, None, quiet]).state, "silent")
+
+    def test_png_orientation(self):
+        # Column 0's top word has its high bit set: the last row of a 64-row column.
+        png = wait.screenshot_png(struct.pack(">BHHI", 1, 2, 64, 16) + bytes([0x80]) + bytes(15), scale=1)
+        raw = zlib.decompress(png[png.index(b"IDAT") + 4:png.index(b"IEND") - 8])
+        rows = [raw[i * 2 + 1] for i in range(64)]
+        self.assertEqual(rows[63], 0x80)
+        self.assertEqual(sum(rows[:63]), 0)
 
 
 class PortTest(unittest.TestCase):
