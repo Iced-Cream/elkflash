@@ -124,8 +124,11 @@ on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
 (2026-10-23, a modified 1.74 build with the stock bootstrap over itself: 68 chunks in
 7.2 s, back on USB 17 s after the commit; then three runs with the YES prompt,
 68 chunks in 7.2 s each, erase and write shown on the unit, restart a few
-seconds after YES). Timed with `--no-confirm`: transfer and commit 7.5 s, USB drops for the
-restart 12.9 s after the commit, answering again at 15.7 s, about 23 s in all.
+seconds after YES). Timed, three runs
+each: elkflash takes 7.4 s; the unit answers again 16.1-16.3 s later with
+`--no-confirm` and 16.3-17.1 s later with YES pressed as soon as the prompt
+appears, about 24 s in all either way. The erase and write take the same time;
+the prompt only adds the time it takes to press YES.
 
 ## Devices
 
