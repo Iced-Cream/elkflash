@@ -70,6 +70,24 @@ needs it. elektroid also copies the size in OsUpgradeStart in host byte order
 (little-endian on x86) and assumes the next offset; elkflash sends it
 big-endian and follows the offset in the device's reply.
 
+## Skipping the YES prompt (`--no-confirm`)
+
+Off by default. With `--no-confirm` elkflash sends OsUpgradeStart with flag 0
+and, after the last chunk, OsUpgradeEnd(1). With flag 0 the device does not ask
+UPGRADE OS NOW? once the image is in; it shows "Waiting for confirm" and
+validates the image. The commit (OsUpgradeEnd(1), answered with status 0) then
+starts the erase and write straight away, and the device restarts by itself.
+OsUpgradeEnd(0), or a commit on an incomplete image, cancels.
+
+There is then no point where someone at the unit can refuse a wrong build, so
+`--no-confirm` cannot be combined with `--force`, and the confirmation question
+says that the device will flash at once. Keep a DIN MIDI interface and a stock
+OS at hand for the STARTUP-menu recovery.
+
+Checked in the analog-emu emulator (Rytm MKII 1.73 to 1.74, A4 MKII 1.56) and
+on an A4 MKII (2026-10-23, stock 1.56 over 1.56: 45 chunks of 30 KiB in
+12.0 s, back on USB 22 s after the commit, no key pressed).
+
 ## Safety checks
 
 - The file must be a well-formed Elektron SysEx file for one device.
