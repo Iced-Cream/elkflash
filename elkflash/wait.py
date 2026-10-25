@@ -98,7 +98,7 @@ def poll(transport, timeout: float = 0.3, screen_too: bool = False):
 
 def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0.25,
                      require_restart: bool = False, reply_timeout: float = 0.3, log=None,
-                     clock=time.monotonic, sleep=time.sleep, quiet_restart: float = 5.0,
+                     clock=time.monotonic, sleep=time.sleep, quiet_restart: float = 2.0,
                      settle: float = 6.0) -> WaitResult:
     """Poll until the device answers Ping, or `timeout` s pass.
 
@@ -112,7 +112,11 @@ def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0
     old OS while it flashes. (Measured: a unit answers on and off while it
     writes, gaps under 1 s, then its port goes for about 3 s; the analog-emu
     window is quiet for 6-8 s, answers for under a second, is quiet for 8 s
-    while it restarts, then answers for good.)
+    while it restarts, then answers for good. Headless analog-emu with the
+    panel link at the unit's speed: quiet for 5 s, answers for 3.5 s, quiet for
+    only 4 s, then the new OS; so the quiet spell needed is 2 s, and it is the
+    6 s settle, longer than any answer spell of the old OS, that tells them
+    apart.)
     """
     t0 = clock()
     result = WaitResult("gone")

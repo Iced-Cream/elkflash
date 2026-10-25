@@ -474,6 +474,11 @@ class WaitTest(unittest.TestCase):
         r = self.run_wait([quiet] * 6 + [Booted] * 5 + [quiet] * 8 + [Booted],
                           require_restart=True, timeout=40)
         self.assertEqual((r.state, r.seconds), ("back", 25))
+        # Headless analog-emu at the panel link's real speed: the old OS answers
+        # for 3.5 s and the new one comes after only 4 s of quiet.
+        r = self.run_wait([quiet] * 6 + [Booted] * 4 + [quiet] * 3 + [Booted],
+                          require_restart=True, timeout=40)
+        self.assertEqual((r.state, r.port_dropped, r.seconds), ("back", False, 19))
 
     def test_never_went_quiet(self):
         self.assertEqual(self.run_wait([Booted], require_restart=True).state, "no-restart")
