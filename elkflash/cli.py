@@ -60,8 +60,32 @@ def _pick_pair(port: str | None, in_port: str | None = None, out_port: str | Non
                      + ", ".join(p.name for p in hits))
 
 
+# The opening Ping is resent when no answer comes: a reply lost just after the port
+# opened would otherwise end the run before anything was sent.
+PING_ATTEMPTS = 3
+PING_ATTEMPT_TIMEOUT = 3.0
+
+
+def _ping(client: RpcClient, timeout: float, attempts: int = PING_ATTEMPTS,
+          attempt_timeout: float = PING_ATTEMPT_TIMEOUT, say=_eprint):
+    """The reply to Ping, sent up to `attempts` times, each with a fresh seq and up to
+    `attempt_timeout` (at most `timeout`) s to answer; a reply to any of them counts."""
+    each = min(attempt_timeout, timeout)
+    seqs = []
+    for n in range(1, attempts + 1):
+        if n > 1:
+            say(f"no reply to PING, retrying ({n}/{attempts})")
+        seqs.append(client.send(protocol.CMD_PING))
+        try:
+            return client.wait_any(seqs, protocol.CMD_PING, each)
+        except RpcTimeout:
+            if n == attempts:
+                raise RpcTimeout(f"no reply to command 0x{protocol.CMD_PING:02X} (seq {seqs[0]}) "
+                                 f"in {each * attempts:g} s") from None
+
+
 def _identify(client: RpcClient, timeout: float):
-    reply = client.call(protocol.CMD_PING, b"", timeout)
+    reply = _ping(client, timeout)
     ping = protocol.parse_ping_reply(reply.args)
     try:
         version = protocol.parse_version_reply(
