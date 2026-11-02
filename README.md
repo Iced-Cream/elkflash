@@ -44,6 +44,11 @@ of real devices and of the analog-emu emulator.
 
 ### Chunk size from the device's limits
 
+The first request on a newly opened port is a Ping. If it gets no answer in 3 s
+(or `--timeout`, if shorter), elkflash sends it again with a new sequence
+number, up to 3 times, and takes an answer to any of them; each resend is noted
+on stderr. Only then does it give up, before anything has been written.
+
 Before writing, elkflash asks for `midi.rpc_file_chunk_size_max` and
 `midi.sysex_size_max`. An A4 MKII (OS 1.56) and a Rytm MKII both answer 32768
 and 65536. The first limit is for the whole decoded message (5-byte header,

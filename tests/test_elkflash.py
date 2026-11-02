@@ -4,7 +4,7 @@ import struct
 import unittest
 import zlib
 
-from elkflash import bootstrap, firmware, protocol, upgrade, wait
+from elkflash import bootstrap, cli, firmware, protocol, upgrade, wait
 from elkflash.rpc import RpcClient, RpcTimeout
 from elkflash.transport import Transport, pair_ports
 
@@ -397,6 +397,68 @@ class RpcTest(unittest.TestCase):
     def test_sequence_wraps(self):
         c = RpcClient(None, first_seq=0xFFFF)
         self.assertEqual([c.next_seq(), c.next_seq()], [0xFFFF, 0])
+
+    def test_wait_any_takes_a_reply_to_an_earlier_seq(self):
+        dev = PingDevice(drop=0)
+        c = RpcClient(dev)
+        first = c.send(protocol.CMD_PING)
+        second = c.send(protocol.CMD_PING)
+        dev.outbox.pop()                     # only the reply to the first Ping arrives
+        self.assertEqual(c.wait_any((first, second), protocol.CMD_PING, 0.05).response_to, first)
+
+
+PING_REPLY = bytes([0x10, 1, 0x01]) + b"Analog Rytm\0"
+
+
+class PingDevice(Transport):
+    """Answers Ping, except that the replies to the first `drop` Pings are lost."""
+
+    def __init__(self, drop):
+        self.drop, self.pings, self.outbox = drop, [], collections.deque()
+
+    def send(self, sysex):
+        req = protocol.Message.decode(protocol.unframe(sysex))
+        assert req.command == protocol.CMD_PING
+        self.pings.append(req.seq)
+        if len(self.pings) > self.drop:
+            self.outbox.append(protocol.frame(
+                protocol.Message(0, req.seq, req.command | 0x80, PING_REPLY).encode()))
+
+    def receive(self, timeout):
+        return self.outbox.popleft() if self.outbox else None
+
+
+class PingRetryTest(unittest.TestCase):
+    def ping(self, dev, timeout=10.0):
+        said = []
+        reply = cli._ping(RpcClient(dev), timeout, attempt_timeout=0.05, say=said.append)
+        return reply, said
+
+    def test_answered_first_time(self):
+        dev = PingDevice(drop=0)
+        reply, said = self.ping(dev)
+        self.assertEqual((dev.pings, said), ([1], []))
+        self.assertEqual(protocol.parse_ping_reply(reply.args).name, "Analog Rytm")
+
+    def test_first_reply_lost_second_answered(self):
+        dev = PingDevice(drop=1)
+        reply, said = self.ping(dev)
+        self.assertEqual(dev.pings, [1, 2])                  # a fresh seq for the resend
+        self.assertEqual(reply.response_to, 2)
+        self.assertEqual(said, ["no reply to PING, retrying (2/3)"])
+
+    def test_all_lost_is_the_same_error_as_before(self):
+        dev = PingDevice(drop=3)
+        with self.assertRaises(RpcTimeout) as e:
+            self.ping(dev)
+        self.assertEqual(dev.pings, [1, 2, 3])
+        self.assertRegex(str(e.exception), r"^no reply to command 0x01 \(seq 1\) in [\d.]+ s$")
+
+    def test_attempt_never_waits_longer_than_timeout(self):
+        dev = PingDevice(drop=3)
+        with self.assertRaises(RpcTimeout) as e:
+            cli._ping(RpcClient(dev), 0.01, say=lambda _: None)
+        self.assertEqual(str(e.exception), "no reply to command 0x01 (seq 1) in 0.03 s")
 
 
 class Booted(Transport):

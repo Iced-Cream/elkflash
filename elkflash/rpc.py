@@ -34,11 +34,17 @@ class RpcClient:
 
     def wait(self, seq: int, command: int, timeout: float) -> Message:
         """The reply to request `seq`; other traffic is skipped."""
+        return self.wait_any((seq,), command, timeout)
+
+    def wait_any(self, seqs, command: int, timeout: float) -> Message:
+        """The reply to any of the requests `seqs` (resends of one request); other
+        traffic is skipped. A timeout names the first of them."""
+        seqs = tuple(seqs)
         deadline = time.monotonic() + timeout
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise RpcTimeout(f"no reply to command 0x{command:02X} (seq {seq}) in {timeout:g} s")
+                raise RpcTimeout(f"no reply to command 0x{command:02X} (seq {seqs[0]}) in {timeout:g} s")
             sysex = self.transport.receive(left)
             if sysex is None:
                 continue
@@ -52,7 +58,7 @@ class RpcClient:
             if self.log:
                 self.log(f"<- reply to {reply.response_to} cmd 0x{reply.command:02X} "
                          f"({len(reply.args)} bytes)")
-            if reply.response_to != seq:
+            if reply.response_to not in seqs:
                 continue
             if reply.command != (command | 0x80):
                 raise protocol.ProtocolError(
