@@ -8,7 +8,9 @@ import time
 
 from . import __version__, bootstrap, firmware, protocol, upgrade, wait
 from .rpc import RpcClient, RpcTimeout
-from .transport import PortPair, TransportError, list_ports, open_pair, pair_ports
+from .transport import (STUCK_EXIT, PortPair, Stuck, TransportError, list_ports, open_pair,
+                        pair_ports, stuck)
+from .transport.watchdog import hard_exit
 
 KNOWN_NAMES = ("Elektron", "Analog Four", "Analog Keys", "Analog Rytm", "Analog Heat",
                "Digitakt", "Digitone", "Syntakt", "Model:", "Tonverk")
@@ -238,6 +240,12 @@ def cmd_upgrade(args) -> int:
         except KeyboardInterrupt:
             _eprint("\ncancelled; sent OsUpgradeEnd(0) to the device")
             return 130
+        except Stuck as e:
+            _eprint(f"\nupgrade stopped: {e}")
+            _eprint("The upgrade had started. If the device shows that it is writing its flash, "
+                    "let it finish and restart before you replug or switch off anything.")
+            _eprint(STUCK_ADVICE)
+            return STUCK_EXIT
         except (upgrade.UpgradeError, RpcTimeout, protocol.ProtocolError) as e:
             _eprint(f"\nupgrade failed: {e}")
             return 1
@@ -387,6 +395,10 @@ REPLY_TIMEOUT_HELP = (f"while waiting: seconds each reply to a poll may take bef
                       f"MIDI ports)")
 
 
+STUCK_ADVICE = ("Close Transfer and other MIDI programs. If the port still hangs, replug the USB "
+                "cable of the device (or of the hub or mirror it is behind) and try again.")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="elkflash", description=__doc__)
     ap.add_argument("--version", action="version", version=f"elkflash {__version__}")
@@ -465,14 +477,20 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_decode)
 
     args = ap.parse_args(argv)
-    if getattr(args, "quiet", False):
-        return _quietly(args)
-    return _run(args)
+    rc = _quietly(args) if getattr(args, "quiet", False) else _run(args)
+    if stuck():
+        # A MIDI call is still hung on its thread: a normal exit can wait on it for good
+        hard_exit(rc)
+    return rc
 
 
 def _run(args) -> int:
     try:
         return args.func(args)
+    except Stuck as e:
+        _eprint(f"error: {e}")
+        _eprint(STUCK_ADVICE)
+        return STUCK_EXIT
     except (firmware.FirmwareError, TransportError, RpcTimeout, protocol.ProtocolError) as e:
         _eprint(f"error: {e}")
         return 1
