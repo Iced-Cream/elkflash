@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 from . import protocol
 from .rpc import RpcClient, RpcTimeout
-from .transport import socket_link
+from .transport import Stuck, socket_link
 
 CMD_SCREENSHOT = 0x04
 
@@ -158,6 +158,8 @@ def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0
                 with open_pair(pair) as t:
                     ping, version, screen = poll(t, reply_timeout)
                 opened = True
+            except Stuck:  # the MIDI service, not the device: waiting longer cannot help
+                raise
             except Exception:  # the port vanishing between find and open
                 screen, opened = None, False
                 result.port_dropped = result.went_quiet = True

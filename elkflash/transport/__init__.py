@@ -10,6 +10,14 @@ class TransportError(Exception):
     pass
 
 
+class Stuck(TransportError):
+    """A call into the MIDI driver or service did not return in time (watchdog.py)."""
+
+    def __init__(self, call: str, seconds: float, message: str):
+        super().__init__(message)
+        self.call, self.seconds = call, seconds
+
+
 @dataclass
 class PortPair:
     name: str
@@ -34,6 +42,15 @@ class Transport:
 
     def __exit__(self, *exc):
         self.close()
+
+
+STUCK_EXIT = 4    # exit code of a run that ended because a MIDI call hung
+
+
+def stuck() -> str | None:
+    """The MIDI call that hung in this process, or None."""
+    winmm = sys.modules.get(__name__ + ".winmm")     # only a process that opened MIDI ports
+    return winmm.WATCHDOG.stuck if winmm else None
 
 
 def backend():

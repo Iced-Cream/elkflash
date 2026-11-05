@@ -187,6 +187,28 @@ through these commands, and are not supported.
   Query.
 - Ctrl-C during the transfer sends OsUpgradeEnd(0) to cancel.
 
+## A stuck Windows MIDI service
+
+On Windows a winmm call can block inside the MIDI service and never return
+(seen 2026-11-05 after a flash through a USB MIDI mirror: every later port open
+hung until the mirror's USB cable was replugged). elkflash's own timeouts
+cannot end a call like that, so every winmm call runs on a worker thread under
+a watchdog:
+
+- A call that has not returned in `ELKFLASH_WINMM_TIMEOUT` seconds (default
+  10; opening a port gets twice that) fails the run with exit code 4 and names
+  the call (`did not return from midiInOpen in 20 s`).
+- After that, no further winmm call is made, the handles are left open, and
+  the process ends with `TerminateProcess`, since a normal exit can wait on
+  the hung call too.
+- `--wait` does not count a stuck call as the device restarting: it stops at
+  once with exit code 4.
+
+If a stuck call ends an upgrade after the data was sent, the device may be
+writing its flash: let it restart before replugging anything. Then close
+Transfer and other MIDI programs, and replug the USB cable of the device or
+of the hub or mirror it is behind.
+
 ## Adding a stock release
 
 A stock release whose bootstrap elkflash does not know yet is refused. See
