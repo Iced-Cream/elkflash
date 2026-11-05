@@ -79,6 +79,15 @@ class SocketTransport(Transport):
             return self._messages.popleft()
 
     def close(self) -> None:
+        # Shut the connection down before closing it. On Linux and macOS close() alone sends no
+        # FIN while the reader thread is blocked in recv() on the same socket, so the other end
+        # never sees this client go; a server that takes one client at a time (QEMU's socket
+        # chardev) then keeps every later connection waiting. shutdown() ends the connection
+        # and wakes the reader on every platform.
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass                    # already gone (reset by the peer, never connected)
         try:
             self._sock.close()
         except OSError:

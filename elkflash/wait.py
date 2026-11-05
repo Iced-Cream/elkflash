@@ -6,8 +6,11 @@ Measured on a Rytm MKII (Overbridge mode, 30 KiB chunks, no prompt): for about
 Screenshot and answers Ping on and off; then its USB MIDI port is gone for
 about 3 s (the restart), and the new OS answers Ping from about 16 s. So an
 answer counts as "back" only after the port has been seen gone (or could not
-be opened), and polls are short (0.3 s replies, 0.25 s apart) so a 3 s gap is
-not missed. A unit that hangs on its "rebooting" screen never leaves USB and
+be opened), and polls are short (0.3 s replies on a MIDI port, 0.25 s apart)
+so a 3 s gap is not missed. A tcp: port (an emulator, or a device reached
+through a bridge) gets 1.5 s per reply: replies there were measured up to
+about 0.6 s, and a reply over the limit counts as no answer, which restarts
+the settle below (--reply-timeout sets it). A unit that hangs on its "rebooting" screen never leaves USB and
 stops answering; only a power cycle helps. Each poll looks at three things: is
 the port there, does the device answer Ping, and, when it does not, does it
 answer Screenshot (the screen request elektron-screen-tool uses), saved as
@@ -23,8 +26,20 @@ from dataclasses import dataclass, field
 
 from . import protocol
 from .rpc import RpcClient, RpcTimeout
+from .transport import socket_link
 
 CMD_SCREENSHOT = 0x04
+
+# How long one reply to a poll may take. A device on USB MIDI answers in a few ms. Through a TCP link
+# (an emulator, or a device reached through a bridge) replies were measured up to about 0.6 s, and a
+# slower reply is no answer at all to the poll.
+REPLY_TIMEOUT_MIDI = 0.3
+REPLY_TIMEOUT_TCP = 1.5
+
+
+def default_reply_timeout(port: str | None) -> float:
+    """The per-reply limit for polls on `port`: longer for a tcp: address than for a MIDI port."""
+    return REPLY_TIMEOUT_TCP if socket_link.is_address(port) else REPLY_TIMEOUT_MIDI
 
 
 @dataclass

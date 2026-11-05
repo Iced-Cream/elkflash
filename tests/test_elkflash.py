@@ -606,5 +606,93 @@ class PortTest(unittest.TestCase):
         self.assertEqual([(p.in_index, p.out_index) for p in pairs], [(0, 1), (1, 2), (2, 3)])
 
 
+class ReplyTimeoutTest(unittest.TestCase):
+    def test_defaults_by_port(self):
+        self.assertEqual(wait.default_reply_timeout("tcp:127.0.0.1:7400"), wait.REPLY_TIMEOUT_TCP)
+        self.assertEqual(wait.default_reply_timeout("Elektron Analog Rytm MKII"), wait.REPLY_TIMEOUT_MIDI)
+        self.assertEqual(wait.default_reply_timeout(None), wait.REPLY_TIMEOUT_MIDI)
+        self.assertEqual((wait.REPLY_TIMEOUT_MIDI, wait.REPLY_TIMEOUT_TCP), (0.3, 1.5))
+
+    def run_cli_wait(self, argv):
+        """cli's wait command with wait_for_restart replaced: -> the reply_timeout it was given."""
+        import contextlib, io
+        seen = {}
+
+        def fake(find, open_pair, **kw):
+            seen.update(kw)
+            r = wait.WaitResult("back")
+            r.name, r.version = "Analog Rytm", "1.74"
+            return r
+        real = wait.wait_for_restart
+        wait.wait_for_restart = fake
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = cli.main(["wait", "--timeout-total", "1"] + argv)
+        finally:
+            wait.wait_for_restart = real
+        return rc, seen.get("reply_timeout")
+
+    def test_cli_default_for_tcp(self):
+        self.assertEqual(self.run_cli_wait(["--port", "tcp:127.0.0.1:7400"]), (0, 1.5))
+
+    def test_cli_flag_wins(self):
+        self.assertEqual(self.run_cli_wait(["--port", "tcp:127.0.0.1:7400", "--reply-timeout", "0.7"]), (0, 0.7))
+
+    def test_cli_rejects_zero(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli_wait(["--port", "tcp:127.0.0.1:7400", "--reply-timeout", "0"])
+
+    def test_poll_uses_the_reply_timeout(self):
+        # a device whose replies take 0.5 s: no answer at 0.3 s, an answer at 1.5 s
+        import time
+
+        class Slow(Booted):
+            def receive(self, timeout):
+                if not self.outbox:
+                    return None
+                if timeout < 0.5:
+                    time.sleep(timeout)
+                    return None
+                return self.outbox.popleft()
+        self.assertIsNone(wait.poll(Slow(), 0.3)[0])
+        self.assertIsNotNone(wait.poll(Slow(), 1.5)[0])
+
+
+class SocketCloseTest(unittest.TestCase):
+    def test_peer_sees_the_close_while_the_reader_waits(self):
+        # The reader thread sits in recv(); after close() the server must read EOF at once (on Linux
+        # close() alone sent no FIN, so a one-client server never saw the client go).
+        import socket
+        from elkflash.transport import socket_link
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        t = socket_link.open(f"tcp:127.0.0.1:{port}")
+        conn, _ = srv.accept()
+        conn.settimeout(2.0)
+        t.send(b"\xF0\x00\xF7")
+        self.assertEqual(conn.recv(16), b"\xF0\x00\xF7")
+        t.close()
+        try:
+            self.assertEqual(conn.recv(16), b"")
+        finally:
+            conn.close()
+            srv.close()
+
+    def test_close_after_the_peer_went(self):
+        import socket
+        from elkflash.transport import socket_link
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        t = socket_link.open(f"tcp:127.0.0.1:{srv.getsockname()[1]}")
+        conn, _ = srv.accept()
+        conn.close()
+        srv.close()
+        t.close()       # no error
+        t.close()       # twice is fine too
+
+
 if __name__ == "__main__":
     unittest.main()

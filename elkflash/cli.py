@@ -271,10 +271,23 @@ def _find_again(args, name):
     return find
 
 
+def _reply_timeout(args, name) -> float:
+    """--reply-timeout, or the default for the port: 1.5 s for tcp:, 0.3 s for a MIDI port."""
+    given = getattr(args, "reply_timeout", None)
+    if given is not None:
+        if given <= 0:
+            raise SystemExit("--reply-timeout must be more than 0")
+        return given
+    return wait.default_reply_timeout(getattr(args, "port", None) or name)
+
+
 def _wait(args, name, timeout, require_restart=False) -> int:
-    print(f"waiting up to {timeout:.0f} s for the device to restart and answer ...")
+    reply_timeout = _reply_timeout(args, name)
+    print(f"waiting up to {timeout:.0f} s for the device to restart and answer "
+          f"(each reply up to {reply_timeout:g} s) ...")
     result = wait.wait_for_restart(_find_again(args, name), open_pair, timeout=timeout,
-                                   require_restart=require_restart, log=lambda m: print("  " + m))
+                                   require_restart=require_restart, reply_timeout=reply_timeout,
+                                   log=lambda m: print("  " + m))
     print(result.summary())
     if result.screen and args.screenshot:
         with open(args.screenshot, "wb") as f:
@@ -369,6 +382,11 @@ def cmd_decode(args) -> int:
     return 0
 
 
+REPLY_TIMEOUT_HELP = (f"while waiting: seconds each reply to a poll may take before it counts as no answer "
+                      f"(default {wait.REPLY_TIMEOUT_TCP:g} for tcp: ports, {wait.REPLY_TIMEOUT_MIDI:g} for "
+                      f"MIDI ports)")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="elkflash", description=__doc__)
     ap.add_argument("--version", action="version", version=f"elkflash {__version__}")
@@ -413,6 +431,7 @@ def main(argv=None) -> int:
                         "that is stuck (exit code 3)")
     p.add_argument("--wait-timeout", type=float, default=90.0,
                    help="seconds --wait allows for the restart (default 90; +120 for the YES press)")
+    p.add_argument("--reply-timeout", type=float, help=REPLY_TIMEOUT_HELP)
     p.add_argument("--screenshot", help="with --wait: save the last screen the device sent (PNG)")
     p.set_defaults(func=cmd_upgrade)
 
@@ -422,6 +441,7 @@ def main(argv=None) -> int:
     p.add_argument("--timeout-total", type=float, default=90.0, help="seconds to wait (default 90)")
     p.add_argument("--require-restart", action="store_true",
                    help="count an answer only after the device has gone quiet once (port gone or no reply)")
+    p.add_argument("--reply-timeout", type=float, help=REPLY_TIMEOUT_HELP)
     p.add_argument("--screenshot", help="save the last screen the device sent (PNG)")
     p.set_defaults(func=cmd_wait)
 
