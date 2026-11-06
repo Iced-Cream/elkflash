@@ -207,7 +207,20 @@ a watchdog:
 If a stuck call ends an upgrade after the data was sent, the device may be
 writing its flash: let it restart before replugging anything. Then close
 Transfer and other MIDI programs, and replug the USB cable of the device or
-of the hub or mirror it is behind.
+of the hub or mirror it is behind. When the port still does not come back,
+the MIDI service itself is stuck: an elevated `Restart-Service midisrv`
+clears it, and drops every open MIDI port on the PC.
+
+The trigger seen so far is a port close while the device has stopped servicing
+its USB endpoints: a unit rebooting after its flash, or a unit behind a USB
+mirror whose far side has gone away while the mirror stays on USB. So since
+0.6, `--wait` on Windows keeps the MIDI port closed while the device restarts.
+It watches the port's USB node through Plug and Play (which sends nothing and
+does not go through the MIDI service), waits until the node has left USB and
+been back for 2 s, and only then opens the port. A node that never leaves USB
+in 60 s is polled over MIDI as before, to tell a unit stuck on its rebooting
+screen from one that did not restart. `--midi-polls` restores the old polling
+from the start.
 
 ## Adding a stock release
 

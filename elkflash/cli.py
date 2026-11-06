@@ -10,6 +10,7 @@ from . import __version__, bootstrap, firmware, protocol, upgrade, wait
 from .rpc import RpcClient, RpcTimeout
 from .transport import (STUCK_EXIT, PortPair, Stuck, TransportError, list_ports, open_pair,
                         pair_ports, stuck)
+from .transport import pnp
 from .transport.watchdog import hard_exit
 
 KNOWN_NAMES = ("Elektron", "Analog Four", "Analog Keys", "Analog Rytm", "Analog Heat",
@@ -293,9 +294,17 @@ def _wait(args, name, timeout, require_restart=False) -> int:
     reply_timeout = _reply_timeout(args, name)
     print(f"waiting up to {timeout:.0f} s for the device to restart and answer "
           f"(each reply up to {reply_timeout:g} s) ...")
+    usb_present = None
+    if require_restart and not getattr(args, "midi_polls", False):
+        pair = _find_again(args, name)() if name else None  # --port may be part of the name
+        node = pnp.usb_node(pair.name) if pair and not pair.address and not (
+            args.in_port or args.out_port) else None
+        if node:
+            print(f"watching {node} on USB; the MIDI port stays closed until it is back")
+            usb_present = lambda: pnp.present(node)  # noqa: E731
     result = wait.wait_for_restart(_find_again(args, name), open_pair, timeout=timeout,
                                    require_restart=require_restart, reply_timeout=reply_timeout,
-                                   log=lambda m: print("  " + m))
+                                   log=lambda m: print("  " + m), usb_present=usb_present)
     print(result.summary())
     if result.screen and args.screenshot:
         with open(args.screenshot, "wb") as f:
@@ -395,6 +404,11 @@ REPLY_TIMEOUT_HELP = (f"while waiting: seconds each reply to a poll may take bef
                       f"MIDI ports)")
 
 
+MIDI_POLLS_HELP = ("while waiting for a restart: poll the MIDI port from the start, as elkflash 0.5 did, "
+                   "instead of watching the device on USB and opening the port only once it is "
+                   "back (polls during the restart can leave the Windows MIDI Service stuck)")
+
+
 STUCK_ADVICE = ("Close Transfer and other MIDI programs. If the port still hangs, replug the USB "
                 "cable of the device (or of the hub or mirror it is behind) and try again.")
 
@@ -445,6 +459,7 @@ def main(argv=None) -> int:
                    help="seconds --wait allows for the restart (default 90; +120 for the YES press)")
     p.add_argument("--reply-timeout", type=float, help=REPLY_TIMEOUT_HELP)
     p.add_argument("--screenshot", help="with --wait: save the last screen the device sent (PNG)")
+    p.add_argument("--midi-polls", action="store_true", help=MIDI_POLLS_HELP)
     p.set_defaults(func=cmd_upgrade)
 
     p = sub.add_parser("wait", help="wait until the device answers again (after an upgrade); "
@@ -455,6 +470,7 @@ def main(argv=None) -> int:
                    help="count an answer only after the device has gone quiet once (port gone or no reply)")
     p.add_argument("--reply-timeout", type=float, help=REPLY_TIMEOUT_HELP)
     p.add_argument("--screenshot", help="save the last screen the device sent (PNG)")
+    p.add_argument("--midi-polls", action="store_true", help=MIDI_POLLS_HELP)
     p.set_defaults(func=cmd_wait)
 
     p = sub.add_parser("bootstrap", help="show a file's bootstrap hash and whether elkflash accepts it")

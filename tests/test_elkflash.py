@@ -1,6 +1,7 @@
 import collections
 import hashlib
 import struct
+import sys
 import unittest
 import zlib
 
@@ -556,6 +557,61 @@ class WaitTest(unittest.TestCase):
         quiet = lambda: Booted(ping=False, screen=False)
         self.assertEqual(self.run_wait([quiet, None, quiet]).state, "silent")
 
+    def run_hands_off(self, usb, script, **kw):
+        """usb[s]: is the node on USB at second s; opens are counted per second."""
+        t = [0.0]
+        opened = []
+        at = lambda seq: seq[min(int(t[0]), len(seq) - 1)]
+
+        def open_pair(_p):
+            opened.append(int(t[0]))
+            return at(script)()
+
+        def sleep(s):
+            t[0] += s
+        kw.setdefault('timeout', 90)
+        kw.setdefault('require_restart', True)
+        r = wait.wait_for_restart(lambda: object() if at(usb) else None, open_pair, interval=1.0,
+                                  clock=lambda: t[0], sleep=sleep, reply_timeout=0.001,
+                                  usb_present=lambda: at(usb), **kw)
+        return r, opened
+
+    def test_hands_off_until_back_on_usb(self):
+        # A direct unit: on USB 10 s while it writes, off 3 s, then back.
+        usb = [True] * 10 + [False] * 3 + [True] * 20
+        r, opened = self.run_hands_off(usb, [Booted] * 40)
+        self.assertEqual((r.state, r.port_dropped), ("back", True))
+        self.assertEqual(opened, [15])   # first open 2 s after it came back, never before
+        self.assertEqual(r.seconds, 15)
+
+    def test_hands_off_sidecar_mirror(self):
+        # Behind the Sidecar Pi: the mirrored node stays on USB with nobody behind it
+        # (any open there could hang) until the Pi reboots ~26 s in, then returns.
+        hang = lambda: self.fail("opened the port while the mirror had nobody behind it")
+        usb = [True] * 26 + [False] * 17 + [True] * 20
+        r, opened = self.run_hands_off(usb, [hang] * 45 + [Booted] * 20)
+        self.assertEqual((r.state, r.seconds, opened), ("back", 45, [45]))
+
+    def test_hands_off_flapping_node_restarts_settle(self):
+        # The node returns for a second, goes again (the Pi's own boot), then stays.
+        usb = [True] * 5 + [False] * 2 + [True] + [False] * 2 + [True] * 10
+        r, opened = self.run_hands_off(usb, [Booted] * 30)
+        self.assertEqual((r.state, opened), ("back", [12]))
+
+    def test_hands_off_never_left_usb_falls_back_to_polls(self):
+        silent = lambda: Booted(ping=False, screen=False)
+        r, opened = self.run_hands_off([True], [silent], timeout=70, hands_off=60)
+        self.assertEqual(r.state, "stuck")
+        self.assertEqual(opened[0], 60)
+
+    def test_hands_off_time_runs_out_off_usb(self):
+        r, opened = self.run_hands_off([True, False], [Booted], timeout=10)
+        self.assertEqual((r.state, opened), ("gone", []))
+
+    def test_without_require_restart_usb_is_ignored(self):
+        r, opened = self.run_hands_off([True], [Booted], require_restart=False)
+        self.assertEqual((r.state, opened), ("back", [0]))
+
     def test_png_orientation(self):
         # Column 0's top word has its high bit set: the last row of a 64-row column.
         png = wait.screenshot_png(struct.pack(">BHHI", 1, 2, 64, 16) + bytes([0x80]) + bytes(15), scale=1)
@@ -563,6 +619,22 @@ class WaitTest(unittest.TestCase):
         rows = [raw[i * 2 + 1] for i in range(64)]
         self.assertEqual(rows[63], 0x80)
         self.assertEqual(sum(rows[:63]), 0)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Plug and Play lookups are Windows only")
+class PnpTest(unittest.TestCase):
+    """Read-only: asks Plug and Play, sends nothing to any device."""
+
+    def test_missing_node_is_not_present(self):
+        from elkflash.transport import pnp
+        self.assertFalse(pnp.present("USB\VID_DEAD&PID_BEEF\0"))
+
+    def test_present_media_nodes_are_found_again(self):
+        from elkflash.transport import pnp
+        nodes = pnp._media_nodes()
+        for ident, _name in nodes:
+            self.assertTrue(pnp.present(ident), ident)
+        self.assertIsNone(pnp.usb_node("no device has this name"))
 
 
 class QuietTest(unittest.TestCase):
