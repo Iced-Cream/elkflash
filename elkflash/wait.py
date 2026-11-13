@@ -11,7 +11,8 @@ so a 3 s gap is not missed. A tcp: port (an emulator, or a device reached
 through a bridge) gets 1.5 s per reply: replies there were measured up to
 about 0.6 s, and a reply over the limit counts as no answer, which restarts
 the settle below (--reply-timeout sets it). A unit that hangs on its "rebooting" screen never leaves USB and
-stops answering; only a power cycle helps. Each poll looks at three things: is
+stops answering; only a power cycle helps. On Windows that is told from the USB node alone
+("stalled", below), and the MIDI port is never opened on it. Each poll looks at three things: is
 the port there, does the device answer Ping, and, when it does not, does it
 answer Screenshot (the screen request elektron-screen-tool uses), saved as
 evidence.
@@ -44,7 +45,7 @@ def default_reply_timeout(port: str | None) -> float:
 
 @dataclass
 class WaitResult:
-    state: str  # "back", "stuck", "gone", "silent", "no-restart"
+    state: str  # "back", "stalled", "stuck", "gone", "silent", "no-restart"
     seconds: float = 0.0
     version: str | None = None
     name: str | None = None
@@ -54,6 +55,11 @@ class WaitResult:
     events: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
+        if self.state == "stalled":
+            return (f"stalled: still on USB {self.seconds:.0f} s after the commit and it never left: the "
+                    "device hung on its restart (stock A4 1.56 can, after writing the new OS). The new "
+                    "OS is written: read its screen, then power-cycle it by hand. Do not reflash, and do "
+                    "not open its MIDI port until it has been power-cycled.")
         if self.state == "back":
             return f"back after {self.seconds:.0f} s: {self.name}, OS {self.version}"
         if self.state == "stuck":
@@ -111,21 +117,23 @@ def poll(transport, timeout: float = 0.3, screen_too: bool = False):
     return ping, version, screen
 
 
-# Hands off the MIDI port while the device restarts (usb_present given): how long to
-# wait for the USB node to go before polling MIDI after all (a unit stuck on its
-# rebooting screen never leaves USB), and how long it must be back before the
-# port is opened. Measured: a unit leaves USB about 10 s after the commit; a
-# Rytm behind the Sidecar Pi mirror about 26 s after (the Pi reboots once the
-# Rytm has gone), and comes back as the same node a second after the Pi.
-HANDS_OFF = 60.0
+# Hands off the MIDI port while the device restarts (usb_present given): how long the
+# USB node may stay before the device counts as stalled on its restart (it never
+# leaves USB, and every MIDI call to it blocks: no port is opened then), and how
+# long it must be back before the port is opened. Measured: a unit leaves USB
+# 16-32 s after the commit ack (18.8 s typical on the A4); a Rytm behind the Sidecar
+# Pi mirror about 26 s after (the Pi reboots once the Rytm has gone), and comes back
+# as the same node a second after the Pi. Stock A4 1.56 hung on its restart twice in
+# about 30 flashes it ran (2026-11-02, 2026-11-12), staying on USB until power-cycled.
+STALL_AFTER = 45.0
 USB_SETTLE = 2.0
 
 
-def _wait_usb(usb_present, result, note, t0, timeout, hands_off, usb_settle, interval,
+def _wait_usb(usb_present, result, note, t0, timeout, stall_after, usb_settle, interval,
               clock, sleep) -> bool:
     """Watch the USB node, not the MIDI port, until the device has left USB and been
-    back for `usb_settle` s. False when it never left within `hands_off` s or the
-    whole `timeout` ran out; result.port_dropped says which."""
+    back for `usb_settle` s. False when it never left within `stall_after` s
+    (result.state "stalled") or the whole `timeout` ran out (result.port_dropped)."""
     back_since = None
     while True:
         now = clock()
@@ -136,8 +144,10 @@ def _wait_usb(usb_present, result, note, t0, timeout, hands_off, usb_settle, int
                     note("usb-back", "back on USB, settling before the port is opened")
                 if now - back_since >= usb_settle:
                     return True
-            elif now - t0 >= hands_off:
-                note("usb-stayed", f"still on USB after {hands_off:g} s: polling the MIDI port")
+            elif now - t0 >= min(stall_after, timeout):
+                result.state = "stalled"
+                note("usb-stayed", f"still on USB after {now - t0:.0f} s: stalled on its restart; "
+                                   "the MIDI port stays closed")
                 return False
         else:
             back_since = None
@@ -151,7 +161,7 @@ def _wait_usb(usb_present, result, note, t0, timeout, hands_off, usb_settle, int
 def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0.25,
                      require_restart: bool = False, reply_timeout: float = 0.3, log=None,
                      clock=time.monotonic, sleep=time.sleep, quiet_restart: float = 2.0,
-                     settle: float = 6.0, usb_present=None, hands_off: float = HANDS_OFF,
+                     settle: float = 6.0, usb_present=None, stall_after: float = STALL_AFTER,
                      usb_settle: float = USB_SETTLE) -> WaitResult:
     """Poll until the device answers Ping, or `timeout` s pass.
 
@@ -176,9 +186,10 @@ def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0
     the USB node is watched until it has gone and been back `usb_settle` s,
     and only then is the port opened. Opening and closing a port while the
     device stops servicing it can leave the Windows MIDI Service stuck for
-    every device on the PC (transport/pnp.py). A node that never leaves USB in
-    `hands_off` s falls back to MIDI polls, to tell a stuck unit from one
-    that did not restart.
+    every device on the PC (transport/pnp.py), and on a device that hung on its
+    restart every MIDI call blocks until it leaves USB. A node that never leaves
+    USB in `stall_after` s is "stalled": the wait ends there and the port is
+    never opened (MIDI polls only without usb_present, e.g. --midi-polls).
     """
     t0 = clock()
     result = WaitResult("gone")
@@ -195,10 +206,13 @@ def wait_for_restart(find, open_pair, timeout: float = 90.0, interval: float = 0
                 log(result.events[-1])
 
     if usb_present is not None and require_restart:
-        settled = _wait_usb(usb_present, result, note, t0, timeout, hands_off, usb_settle,
+        settled = _wait_usb(usb_present, result, note, t0, timeout, stall_after, usb_settle,
                             interval, clock, sleep)
-        if not settled and result.port_dropped:  # time ran out while it was off USB or settling
-            result.state, result.seconds = "gone", clock() - t0
+        if not settled:
+            # stalled: never left USB, so no port is opened; or time ran out off USB or settling
+            if result.state != "stalled":
+                result.state = "gone"
+            result.seconds = clock() - t0
             return result
 
     while True:

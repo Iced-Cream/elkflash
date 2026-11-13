@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
@@ -230,6 +231,11 @@ def cmd_upgrade(args) -> int:
                 print("cancelled")
                 return 1
 
+        # Watch the USB node from before the first byte, so no removal after the commit is
+        # missed, and look it up now: listing ports goes through the MIDI service, which
+        # blocks on a unit that hung on its restart.
+        watch = _usb_watch(args, pair) if args.wait else None
+
         opts = upgrade.UpgradeOptions(chunk_size=chunk_size,
                                       start_timeout=args.start_timeout,
                                       write_timeout=args.timeout,
@@ -239,33 +245,65 @@ def cmd_upgrade(args) -> int:
         try:
             result = upgrade.run(client, fw.data, opts, _progress_printer())
         except KeyboardInterrupt:
+            _close(watch)
             _eprint("\ncancelled; sent OsUpgradeEnd(0) to the device")
             return 130
         except Stuck as e:
+            _close(watch)
             _eprint(f"\nupgrade stopped: {e}")
             _eprint("The upgrade had started. If the device shows that it is writing its flash, "
                     "let it finish and restart before you replug or switch off anything.")
             _eprint(STUCK_ADVICE)
             return STUCK_EXIT
         except (upgrade.UpgradeError, RpcTimeout, protocol.ProtocolError) as e:
+            _close(watch)
             _eprint(f"\nupgrade failed: {e}")
             return 1
+        except BaseException:
+            _close(watch)
+            raise
 
-    rate = result.size / max(result.seconds, 1e-6) / 1024
-    if result.chunk_size != chunk_size:
-        print(f"note: chunks were reduced to {result.chunk_size} bytes after timeouts")
-    print(f"sent {result.size} bytes in {result.chunks} chunks, {result.seconds:.1f} s "
-          f"({rate:.1f} KiB/s), {result.resends} resends")
-    if result.committed:
-        print("Committed: the device is erasing and writing its flash now and restarts "
-              "by itself. Do not power it off or unplug it until it has restarted.")
-    else:
-        print("Press YES on the device to finish the OS upgrade (NO cancels); "
-              "it restarts when done.")
-    if args.wait:
-        timeout = args.wait_timeout if args.no_confirm else args.wait_timeout + 120
-        return _wait(args, pair.name, timeout, require_restart=True)
-    return 0
+    try:
+        rate = result.size / max(result.seconds, 1e-6) / 1024
+        if result.chunk_size != chunk_size:
+            print(f"note: chunks were reduced to {result.chunk_size} bytes after timeouts")
+        print(f"sent {result.size} bytes in {result.chunks} chunks, {result.seconds:.1f} s "
+              f"({rate:.1f} KiB/s), {result.resends} resends")
+        if result.committed:
+            print("Committed: the device is erasing and writing its flash now and restarts "
+                  "by itself. Do not power it off or unplug it until it has restarted.")
+        else:
+            print("Press YES on the device to finish the OS upgrade (NO cancels); "
+                  "it restarts when done.")
+        if args.wait:
+            timeout = args.wait_timeout if args.no_confirm else args.wait_timeout + 120
+            # Without the device's prompt the commit is now; with it, it comes when YES is
+            # pressed, so only the whole wait tells a stall there.
+            stall_after = args.stall_after if args.no_confirm else timeout
+            return _wait(args, pair.name, timeout, require_restart=True, watch=watch,
+                         stall_after=stall_after, committed=result.committed)
+        return 0
+    finally:
+        _close(watch)
+
+
+def _close(watch):
+    if watch is not None:
+        watch.close()
+
+
+def _usb_watch(args, pair):
+    """A pnp.UsbWatch on the USB node behind `pair`, or None: --midi-polls, a tcp: port, split
+    --in-port/--out-port, not Windows, or no single node of that name."""
+    if getattr(args, "midi_polls", False) or pair is None or pair.address or args.in_port or args.out_port:
+        return None
+    node = pnp.usb_node(pair.name)
+    if not node:
+        return None
+    watch = pnp.UsbWatch(node)
+    how = "Plug and Play events" if watch.notified else "polls (no Plug and Play events)"
+    print(f"watching {node} on USB through {how}")
+    return watch
 
 
 def _find_again(args, name):
@@ -290,21 +328,46 @@ def _reply_timeout(args, name) -> float:
     return wait.default_reply_timeout(getattr(args, "port", None) or name)
 
 
-def _wait(args, name, timeout, require_restart=False) -> int:
+def _wait(args, name, timeout, require_restart=False, watch=None, stall_after=None,
+          committed=None) -> int:
     reply_timeout = _reply_timeout(args, name)
+    stall_after = wait.STALL_AFTER if stall_after is None else stall_after
     print(f"waiting up to {timeout:.0f} s for the device to restart and answer "
           f"(each reply up to {reply_timeout:g} s) ...")
     usb_present = None
+    own = None
     if require_restart and not getattr(args, "midi_polls", False):
-        pair = _find_again(args, name)() if name else None  # --port may be part of the name
-        node = pnp.usb_node(pair.name) if pair and not pair.address and not (
-            args.in_port or args.out_port) else None
-        if node:
-            print(f"watching {node} on USB; the MIDI port stays closed until it is back")
-            usb_present = lambda: pnp.present(node)  # noqa: E731
-    result = wait.wait_for_restart(_find_again(args, name), open_pair, timeout=timeout,
-                                   require_restart=require_restart, reply_timeout=reply_timeout,
-                                   log=lambda m: print("  " + m), usb_present=usb_present)
+        if watch is None:
+            pair = _find_again(args, name)() if name else None  # --port may be part of the name
+            watch = own = _usb_watch(args, pair)
+        if watch is not None:
+            print(f"the MIDI port stays closed until it has left USB and is back; no removal in "
+                  f"{stall_after:.0f} s counts as stalled (exit {STALL_EXIT})")
+            usb_present = watch.present
+    try:
+        t0 = time.monotonic()
+        result = wait.wait_for_restart(_find_again(args, name), open_pair, timeout=timeout,
+                                       require_restart=require_restart, reply_timeout=reply_timeout,
+                                       log=lambda m: print("  " + m), usb_present=usb_present,
+                                       stall_after=stall_after)
+    finally:
+        _close(own)
+    if watch is not None and watch.events:
+        print("Plug and Play: " + ", ".join(f"{what} at {at - t0:+.1f} s" for at, what in watch.events))
+    if result.state == "stalled":
+        since = time.monotonic() - (watch.since if watch is not None else t0) + 30
+        lines = pnp.stall_evidence(since)
+        if lines:
+            print("evidence (read from the PC, nothing sent to the device):")
+            for line in lines:
+                print("  " + line)
+        print("Read the device's screen now (expected: SUCCESS! REBOOTING) and note the time of the "
+              "power cycle; a screenshot over MIDI would hang.")
+        if committed is False:
+            print("(the upgrade waited for YES on the device: if nobody pressed it, the old OS is "
+                  "still there)")
+        print(result.summary())     # the last line: what --quiet prints
+        return STALL_EXIT
     print(result.summary())
     if result.screen and args.screenshot:
         with open(args.screenshot, "wb") as f:
@@ -315,7 +378,57 @@ def _wait(args, name, timeout, require_restart=False) -> int:
 
 def cmd_wait(args) -> int:
     """Wait for a device to answer, e.g. after an upgrade started elsewhere."""
-    return _wait(args, args.port, args.timeout_total, require_restart=args.require_restart)
+    return _wait(args, args.port, args.timeout_total, require_restart=args.require_restart,
+                 stall_after=args.stall_after)
+
+
+def cmd_usb_cycle(args) -> int:
+    """Watch a unit's USB node, never its MIDI port, until it has left USB and been back
+    for --settle s: the power cycle by hand of a unit that stalled on its restart."""
+    nodes = pnp.usb_nodes_named(args.port)
+    if len(nodes) != 1:
+        _eprint(f"no single USB MIDI device named like {args.port!r} on USB "
+                f"({', '.join(n for _i, n in nodes) or 'none'}); nothing was watched")
+        return 2
+    node, label = nodes[0]
+    with pnp.UsbWatch(node) as watch:
+        how = "Plug and Play events" if watch.notified else "polls (no Plug and Play events)"
+        print(f"watching {label} ({node}) through {how}; no MIDI port is opened")
+        print(f"power-cycle it by hand now; waiting up to {args.timeout_total:.0f} s")
+        t0 = time.monotonic()
+        left = back_since = None
+        while True:
+            now = time.monotonic()
+            if watch.present():
+                if left is not None:
+                    if back_since is None:
+                        back_since = now
+                        print(f"  {now - t0:5.1f} s  back on USB")
+                    if now - back_since >= args.settle:
+                        break
+            else:
+                back_since = None
+                if left is None:
+                    left = now
+                    print(f"  {now - t0:5.1f} s  left USB")
+            if now - t0 >= args.timeout_total:
+                break
+            if args.stop_file and os.path.exists(args.stop_file):
+                print(f"  {now - t0:5.1f} s  stopped: {args.stop_file} is there")
+                break
+            time.sleep(0.1)
+        events = list(watch.events)
+    if events:
+        print("Plug and Play: " + ", ".join(f"{what} at {at - t0:+.1f} s" for at, what in events))
+    if left is None:
+        print(f"it never left USB in {time.monotonic() - t0:.0f} s: not power-cycled yet")
+        return STALL_EXIT
+    if back_since is None or time.monotonic() - back_since < args.settle:
+        print(f"it left USB at {left - t0:.1f} s and is not back on USB for {args.settle:g} s yet")
+        return 3
+    print(f"power-cycled: left USB at {left - t0:.1f} s, back at {back_since - t0:.1f} s; "
+          "its MIDI port may be opened now")
+    return 0
 
 
 def cmd_bootstrap(args) -> int:
@@ -406,7 +519,16 @@ REPLY_TIMEOUT_HELP = (f"while waiting: seconds each reply to a poll may take bef
 
 MIDI_POLLS_HELP = ("while waiting for a restart: poll the MIDI port from the start, as elkflash 0.5 did, "
                    "instead of watching the device on USB and opening the port only once it is "
-                   "back (polls during the restart can leave the Windows MIDI Service stuck)")
+                   "back (polls during the restart can leave the Windows MIDI Service stuck, and a "
+                   "device that stalled on its restart blocks every MIDI call to it; no stall "
+                   "detection then)")
+
+
+STALL_EXIT = 5   # the device hung on its restart: on USB, never left, new OS written
+
+STALL_AFTER_HELP = (f"while waiting for a restart on USB: seconds after the commit the device may stay "
+                    f"on USB before it counts as stalled on its restart, exit {STALL_EXIT} (default "
+                    f"{wait.STALL_AFTER:g}; units leave 16-32 s after the commit)")
 
 
 STUCK_ADVICE = ("Close Transfer and other MIDI programs. If the port still hangs, replug the USB "
@@ -460,6 +582,7 @@ def main(argv=None) -> int:
     p.add_argument("--reply-timeout", type=float, help=REPLY_TIMEOUT_HELP)
     p.add_argument("--screenshot", help="with --wait: save the last screen the device sent (PNG)")
     p.add_argument("--midi-polls", action="store_true", help=MIDI_POLLS_HELP)
+    p.add_argument("--stall-after", type=float, default=wait.STALL_AFTER, help=STALL_AFTER_HELP)
     p.set_defaults(func=cmd_upgrade)
 
     p = sub.add_parser("wait", help="wait until the device answers again (after an upgrade); "
@@ -471,7 +594,21 @@ def main(argv=None) -> int:
     p.add_argument("--reply-timeout", type=float, help=REPLY_TIMEOUT_HELP)
     p.add_argument("--screenshot", help="save the last screen the device sent (PNG)")
     p.add_argument("--midi-polls", action="store_true", help=MIDI_POLLS_HELP)
+    p.add_argument("--stall-after", type=float, default=wait.STALL_AFTER, help=STALL_AFTER_HELP)
     p.set_defaults(func=cmd_wait)
+
+    p = sub.add_parser("usb-cycle", help="after a stall (exit 5): watch the device on USB, never its MIDI "
+                                         "port, until it has been power-cycled by hand (Windows)")
+    p.add_argument("--port", required=True, help="part of the device's USB MIDI name, e.g. 'Analog Four'")
+    p.add_argument("--timeout-total", type=float, default=900.0,
+                   help="seconds to wait for the power cycle (default 900)")
+    p.add_argument("--settle", type=float, default=wait.USB_SETTLE,
+                   help=f"seconds it must be back on USB (default {wait.USB_SETTLE:g})")
+    p.add_argument("--stop-file", help="stop watching once this file exists (e.g. a while after the "
+                                       "person has said the power cycle is done)")
+    p.add_argument("-q", "--quiet", action="store_true", help="print only the last line")
+    p.add_argument("--log", help="with --quiet: append the full output to this file")
+    p.set_defaults(func=cmd_usb_cycle)
 
     p = sub.add_parser("bootstrap", help="show a file's bootstrap hash and whether elkflash accepts it")
     p.add_argument("file")
