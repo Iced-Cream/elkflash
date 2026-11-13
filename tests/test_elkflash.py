@@ -747,6 +747,17 @@ class StallCliTest(unittest.TestCase):
         self.assertEqual(rc, self.cli.STALL_EXIT, out)
         self.assertIn("never left USB", out)
 
+    def test_usb_cycle_stop_file(self):
+        import os
+        import tempfile
+        self.pnp.usb_nodes_named = lambda part: [("USB\\N", "Elektron Analog Four mkII")]
+        self.fake_watch(lambda t: True)
+        stop = os.path.join(tempfile.mkdtemp(), "stop")
+        open(stop, "w").close()
+        rc, out = self.run_cli("usb-cycle", "--port", "Analog Four", "--stop-file", stop)
+        self.assertEqual(rc, self.cli.STALL_EXIT, out)
+        self.assertIn("never left USB in 0 s", out)
+
     def test_usb_cycle_needs_one_node(self):
         self.pnp.usb_nodes_named = lambda part: []
         rc, out = self.run_cli("usb-cycle", "--port", "Analog Four")

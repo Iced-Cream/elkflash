@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
@@ -412,15 +413,18 @@ def cmd_usb_cycle(args) -> int:
                     print(f"  {now - t0:5.1f} s  left USB")
             if now - t0 >= args.timeout_total:
                 break
+            if args.stop_file and os.path.exists(args.stop_file):
+                print(f"  {now - t0:5.1f} s  stopped: {args.stop_file} is there")
+                break
             time.sleep(0.1)
         events = list(watch.events)
     if events:
         print("Plug and Play: " + ", ".join(f"{what} at {at - t0:+.1f} s" for at, what in events))
     if left is None:
-        print(f"it never left USB in {args.timeout_total:.0f} s: not power-cycled yet")
+        print(f"it never left USB in {time.monotonic() - t0:.0f} s: not power-cycled yet")
         return STALL_EXIT
     if back_since is None or time.monotonic() - back_since < args.settle:
-        print(f"it left USB at {left - t0:.1f} s and is not back after {args.timeout_total:.0f} s")
+        print(f"it left USB at {left - t0:.1f} s and is not back on USB for {args.settle:g} s yet")
         return 3
     print(f"power-cycled: left USB at {left - t0:.1f} s, back at {back_since - t0:.1f} s; "
           "its MIDI port may be opened now")
@@ -600,6 +604,8 @@ def main(argv=None) -> int:
                    help="seconds to wait for the power cycle (default 900)")
     p.add_argument("--settle", type=float, default=wait.USB_SETTLE,
                    help=f"seconds it must be back on USB (default {wait.USB_SETTLE:g})")
+    p.add_argument("--stop-file", help="stop watching once this file exists (e.g. a while after the "
+                                       "person has said the power cycle is done)")
     p.add_argument("-q", "--quiet", action="store_true", help="print only the last line")
     p.add_argument("--log", help="with --quiet: append the full output to this file")
     p.set_defaults(func=cmd_usb_cycle)
