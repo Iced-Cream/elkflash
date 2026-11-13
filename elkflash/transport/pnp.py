@@ -18,6 +18,7 @@ absence on 2026-11-12, and a missed restart looks like a stall.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import threading
 import time
@@ -176,6 +177,7 @@ class UsbWatch:
         self.instance_id = instance_id
         self._presence = presence or (lambda: present(instance_id))
         self._clock = clock
+        self.since = clock()          # for evidence: how far back to read the event logs
         self._lock = threading.Lock()
         self._unseen = 0
         self.events: list[tuple[float, str]] = []
@@ -235,3 +237,38 @@ class UsbWatch:
 
     def __exit__(self, *exc):
         self.close()
+
+
+KERNEL_PNP_QUERIES = (
+    ("Microsoft-Windows-Kernel-PnP/Configuration", "*[System[TimeCreated[timediff(@SystemTime) <= {ms}]]]"),
+    ("System", "*[System[Provider[@Name='Microsoft-Windows-Kernel-PnP'] and "
+               "TimeCreated[timediff(@SystemTime) <= {ms}]]]"),
+)
+MIDISRV_QUERY = ("Get-CimInstance Win32_Process -Filter \"Name='midisrv.exe'\" | ForEach-Object "
+                 "{ 'midisrv pid {0}, started {1}' -f $_.ProcessId, $_.CreationDate }")
+
+
+def stall_evidence(seconds: float, run=subprocess.run) -> list[str]:
+    """What a stall leaves on the PC, read without touching the device: the Kernel-PnP events
+    of the last `seconds` (they show whether the unit ever left USB) and the MIDI service's
+    pid and start time (a restart of it shows). Best-effort; [] where not Windows."""
+    if sys.platform != "win32":
+        return []
+    ms = int(max(seconds, 1) * 1000)
+    out = []
+    for log, query in KERNEL_PNP_QUERIES:
+        cmd = ["wevtutil", "qe", log, "/f:text", "/q:" + query.format(ms=ms)]
+        try:
+            r = run(cmd, capture_output=True, text=True, timeout=30, errors="replace")
+            body = (r.stdout or r.stderr or "").strip()
+            out.append(f"--- {log}, last {ms // 1000} s ---")
+            out += body.splitlines() if body else ["(no events)"]
+        except (OSError, subprocess.SubprocessError) as e:
+            out.append(f"--- {log}: not read ({e}) ---")
+    try:
+        r = run(["powershell", "-NoProfile", "-Command", MIDISRV_QUERY], capture_output=True, text=True,
+                timeout=30, errors="replace")
+        out += (r.stdout or "").strip().splitlines() or ["midisrv: not running"]
+    except (OSError, subprocess.SubprocessError) as e:
+        out.append(f"midisrv: not read ({e})")
+    return out

@@ -684,6 +684,27 @@ class UsbWatchTest(unittest.TestCase):
         self.assertFalse(w.present())
 
 
+class StallEvidenceTest(unittest.TestCase):
+    def test_reads_both_pnp_logs_and_midisrv(self):
+        from elkflash.transport import pnp
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            out = "midisrv pid 4242, started 20261113" if cmd[0] == "powershell" else "Event[0]: removed"
+            return collections.namedtuple("R", "stdout stderr")(out, "")
+        saved = sys.platform
+        sys.platform = "win32"
+        try:
+            lines = pnp.stall_evidence(90, run=run)
+        finally:
+            sys.platform = saved
+        self.assertEqual([c[0] for c in calls], ["wevtutil", "wevtutil", "powershell"])
+        self.assertIn("timediff(@SystemTime) <= 90000", calls[0][-1])
+        self.assertIn("midisrv pid 4242, started 20261113", lines)
+        self.assertEqual(sum(1 for l in lines if l.startswith("--- ")), 2)
+
+
 class StallCliTest(unittest.TestCase):
     """The CLI's stall exit and usb-cycle, with Plug and Play faked."""
 

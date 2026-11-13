@@ -353,12 +353,21 @@ def _wait(args, name, timeout, require_restart=False, watch=None, stall_after=No
         _close(own)
     if watch is not None and watch.events:
         print("Plug and Play: " + ", ".join(f"{what} at {at - t0:+.1f} s" for at, what in watch.events))
-    print(result.summary())
     if result.state == "stalled":
+        since = time.monotonic() - (watch.since if watch is not None else t0) + 30
+        lines = pnp.stall_evidence(since)
+        if lines:
+            print("evidence (read from the PC, nothing sent to the device):")
+            for line in lines:
+                print("  " + line)
+        print("Read the device's screen now (expected: SUCCESS! REBOOTING) and note the time of the "
+              "power cycle; a screenshot over MIDI would hang.")
         if committed is False:
             print("(the upgrade waited for YES on the device: if nobody pressed it, the old OS is "
                   "still there)")
+        print(result.summary())     # the last line: what --quiet prints
         return STALL_EXIT
+    print(result.summary())
     if result.screen and args.screenshot:
         with open(args.screenshot, "wb") as f:
             f.write(result.screen)
