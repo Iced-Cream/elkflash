@@ -1,4 +1,6 @@
 import collections
+import contextlib
+import io
 import hashlib
 import struct
 import sys
@@ -7,7 +9,7 @@ import zlib
 
 from elkflash import bootstrap, cli, firmware, protocol, upgrade, wait
 from elkflash.rpc import RpcClient, RpcTimeout
-from elkflash.transport import Transport, pair_ports
+from elkflash.transport import PortPair, Transport, pair_ports
 
 
 class Pack7Test(unittest.TestCase):
@@ -598,11 +600,50 @@ class WaitTest(unittest.TestCase):
         r, opened = self.run_hands_off(usb, [Booted] * 30)
         self.assertEqual((r.state, opened), ("back", [12]))
 
-    def test_hands_off_never_left_usb_falls_back_to_polls(self):
-        silent = lambda: Booted(ping=False, screen=False)
-        r, opened = self.run_hands_off([True], [silent], timeout=70, hands_off=60)
-        self.assertEqual(r.state, "stuck")
-        self.assertEqual(opened[0], 60)
+    def test_never_left_usb_is_stalled_and_no_port_is_opened(self):
+        # T80 / T282: stock 1.56 hung on its restart; the node stayed on USB until a hand power
+        # cycle, and any MIDI call to it blocked. No port is opened, ever.
+        hang = lambda: self.fail("opened the port of a unit that stalled on its restart")
+        r, opened = self.run_hands_off([True], [hang], timeout=90)
+        self.assertEqual((r.state, r.seconds, opened), ("stalled", 45, []))
+        self.assertIn("power-cycle it by hand", r.summary())
+        self.assertIn("Do not reflash", r.summary())
+
+    def test_stall_after_is_settable_and_capped_by_timeout(self):
+        r, opened = self.run_hands_off([True], [Booted], stall_after=30)
+        self.assertEqual((r.state, r.seconds, opened), ("stalled", 30, []))
+        r, opened = self.run_hands_off([True], [Booted], timeout=20)
+        self.assertEqual((r.state, r.seconds, opened), ("stalled", 20, []))
+
+    def test_slowest_measured_restart_is_not_a_stall(self):
+        # Units left USB 16-32 s after the commit; the Sidecar mirror about 26 s.
+        usb = [True] * 32 + [False] * 3 + [True] * 20
+        r, opened = self.run_hands_off(usb, [Booted] * 60)
+        self.assertEqual((r.state, opened), ("back", [37]))
+
+    def test_short_absence_seen_through_pnp_events(self):
+        # F12 r-067c87: a ~0.2 s absence between two 0.25 s polls. The poll alone says
+        # "present" throughout; the removal event still counts as the restart.
+        from elkflash.transport import pnp
+        t = [0.0]
+        watch = pnp.UsbWatch("USB\\VID_1935&PID_0B48&MI_04\\X", presence=lambda: True, register=False,
+                             clock=lambda: t[0])
+        opened = []
+
+        def open_pair(_p):
+            opened.append(int(t[0]))
+            return Booted()
+
+        def sleep(s):
+            t[0] += s
+            if t[0] == 19:
+                watch.on_action(pnp.ACTION_REMOVED)
+                watch.on_action(pnp.ACTION_STARTED)
+        r = wait.wait_for_restart(lambda: object(), open_pair, interval=1.0, clock=lambda: t[0],
+                                  sleep=sleep, reply_timeout=0.001, require_restart=True,
+                                  usb_present=watch.present, timeout=90)
+        self.assertEqual((r.state, r.port_dropped, opened), ("back", True, [22]))
+        self.assertEqual([w for _t, w in watch.events], ["removed", "arrived"])
 
     def test_hands_off_time_runs_out_off_usb(self):
         r, opened = self.run_hands_off([True, False], [Booted], timeout=10)
@@ -621,13 +662,100 @@ class WaitTest(unittest.TestCase):
         self.assertEqual(sum(rows[:63]), 0)
 
 
+class UsbWatchTest(unittest.TestCase):
+    def test_each_removal_reads_absent_once(self):
+        from elkflash.transport import pnp
+        w = pnp.UsbWatch("X", presence=lambda: True, register=False)
+        self.assertFalse(w.notified)
+        w.on_action(pnp.ACTION_REMOVED)
+        w.on_action(pnp.ACTION_ENUMERATED)
+        w.on_action(pnp.ACTION_STARTED)          # one arrival recorded, not two
+        w.on_action(pnp.ACTION_REMOVED)
+        self.assertEqual([w.present() for _ in range(3)], [False, False, True])
+        self.assertEqual([e for _t, e in w.events], ["removed", "arrived", "removed"])
+        self.assertEqual(w.removals(), 2)
+
+    def test_poll_only_without_events(self):
+        from elkflash.transport import pnp
+        on = [True]
+        w = pnp.UsbWatch("X", presence=lambda: on[0], register=False)
+        self.assertTrue(w.present())
+        on[0] = False
+        self.assertFalse(w.present())
+
+
+class StallCliTest(unittest.TestCase):
+    """The CLI's stall exit and usb-cycle, with Plug and Play faked."""
+
+    def setUp(self):
+        from elkflash import cli
+        from elkflash.transport import pnp
+        self.cli, self.pnp = cli, pnp
+        self.saved = (pnp.usb_nodes_named, pnp.UsbWatch, cli.time.sleep, cli.time.monotonic)
+        self.t = [0.0]
+        cli.time.sleep = lambda s: self.t.__setitem__(0, self.t[0] + s)
+        cli.time.monotonic = lambda: self.t[0]
+
+    def tearDown(self):
+        p, c = self.pnp, self.cli
+        p.usb_nodes_named, p.UsbWatch, c.time.sleep, c.time.monotonic = self.saved
+
+    def fake_watch(self, on_usb):
+        """UsbWatch over on_usb(t), no Windows calls."""
+        real = self.saved[1]
+        self.pnp.UsbWatch = lambda node: real(node, presence=lambda: on_usb(self.t[0]), register=False,
+                                              clock=lambda: self.t[0])
+
+    def run_cli(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = self.cli.main(list(argv))
+        return rc, out.getvalue()
+
+    def test_usb_cycle_sees_the_power_cycle(self):
+        self.pnp.usb_nodes_named = lambda part: [("USB\\N", "Elektron Analog Four mkII")]
+        self.fake_watch(lambda t: not 30 <= t < 33)
+        rc, out = self.run_cli("usb-cycle", "--port", "Analog Four")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("power-cycled: left USB at 30.0 s", out)
+
+    def test_usb_cycle_never_left(self):
+        self.pnp.usb_nodes_named = lambda part: [("USB\\N", "Elektron Analog Four mkII")]
+        self.fake_watch(lambda t: True)
+        rc, out = self.run_cli("usb-cycle", "--port", "Analog Four", "--timeout-total", "20")
+        self.assertEqual(rc, self.cli.STALL_EXIT, out)
+        self.assertIn("never left USB", out)
+
+    def test_usb_cycle_needs_one_node(self):
+        self.pnp.usb_nodes_named = lambda part: []
+        rc, out = self.run_cli("usb-cycle", "--port", "Analog Four")
+        self.assertEqual(rc, 2, out)
+
+    def test_wait_exits_stalled_without_opening_a_port(self):
+        self.fake_watch(lambda t: True)
+        cli = self.cli
+        saved = cli._find_again, cli.open_pair, cli.pnp.usb_node
+        try:
+            pair = PortPair("Elektron Analog Four mkII", 0, 0)
+            cli._find_again = lambda args, name: (lambda: pair)
+            cli.pnp.usb_node = lambda name: "USB\\N"
+            cli.open_pair = lambda p: self.fail("opened the port of a stalled unit")
+            rc, out = self.run_cli("wait", "--port", "Analog Four", "--require-restart",
+                                   "--stall-after", "0.5")   # wait_for_restart sleeps for real
+        finally:
+            cli._find_again, cli.open_pair, cli.pnp.usb_node = saved
+        self.assertEqual(rc, cli.STALL_EXIT, out)
+        self.assertIn("stalled: still on USB", out)
+        self.assertIn("Do not reflash", out)
+
+
 @unittest.skipUnless(sys.platform == "win32", "Plug and Play lookups are Windows only")
 class PnpTest(unittest.TestCase):
     """Read-only: asks Plug and Play, sends nothing to any device."""
 
     def test_missing_node_is_not_present(self):
         from elkflash.transport import pnp
-        self.assertFalse(pnp.present("USB\VID_DEAD&PID_BEEF\0"))
+        self.assertFalse(pnp.present("USB\\VID_DEAD&PID_BEEF\\0"))
 
     def test_present_media_nodes_are_found_again(self):
         from elkflash.transport import pnp

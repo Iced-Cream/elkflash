@@ -217,10 +217,33 @@ mirror whose far side has gone away while the mirror stays on USB. So since
 0.6, `--wait` on Windows keeps the MIDI port closed while the device restarts.
 It watches the port's USB node through Plug and Play (which sends nothing and
 does not go through the MIDI service), waits until the node has left USB and
-been back for 2 s, and only then opens the port. A node that never leaves USB
-in 60 s is polled over MIDI as before, to tell a unit stuck on its rebooting
-screen from one that did not restart. `--midi-polls` restores the old polling
-from the start.
+been back for 2 s, and only then opens the port. `--midi-polls` restores the old polling
+from the start (and has no stall detection).
+
+## A unit that stalls on its restart (exit code 5)
+
+Stock Analog Four MKII 1.56 can hang on its own restart after it has written the new
+OS: it masks every interrupt and then waits for a serial queue that only those
+interrupts drain. It sits on SUCCESS! REBOOTING, stays on USB, and every MIDI call to
+it blocks until it leaves USB. It was seen twice in about 30 flashes that stock 1.56
+ran (only a flash away from stock runs that code). The new OS is already written, so
+a power cycle boots it.
+
+Since 0.7, `--wait` on Windows tells this from the USB node alone:
+
+- elkflash registers for the node's Plug and Play events (`CM_Register_Notification`)
+  before the first byte is sent, so a removal is seen however short it is (the 0.6
+  poll missed a real 0.2 s restart).
+- A node that has not left USB `--stall-after` seconds (default 45) after the commit
+  is **stalled**: the wait ends with exit code 5 and "power-cycle it by hand, do not
+  reflash". No MIDI port is opened on it, not even to poll. Units leave USB 16-32 s
+  after the commit.
+- `elkflash usb-cycle --port "Analog Four"` then watches the node, never its MIDI
+  port, while the unit is power-cycled by hand, and exits 0 once it has left USB and
+  been back for 2 s (5: it never left; 3: it left and did not come back). Only then
+  is its port safe to open.
+
+Read the unit's screen before the power cycle: a screenshot over MIDI would hang.
 
 ## Adding a stock release
 
